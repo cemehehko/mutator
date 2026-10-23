@@ -13,7 +13,7 @@ use egui;
 use tui_patch::agent::MsgView;
 use tui_patch::data::File;
 use tui_patch::desk::Desk;
-use tui_patch::tll;
+use tui_patch::io;
 use tui_patch::ui::{App, Look};
 
 fn root() -> std::path::PathBuf {
@@ -30,7 +30,7 @@ struct Win {
 
 impl Win {
     fn open() -> Win {
-        tll::quiet();
+        io::quiet();
         let path = root().join("tests/data/lz4.dat");
         let mut desk = Desk::open(File::open(&path).unwrap(), Arc::new(|| {}));
         let t = Instant::now();

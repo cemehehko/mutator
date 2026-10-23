@@ -11,7 +11,7 @@
 use std::collections::VecDeque;
 
 use super::index::Index;
-use crate::tll::{Context, Msg, Open, Reader};
+use crate::io::{Context, Msg, Open, Reader};
 
 /// Пропуск seq, после которого дешевле переоткрыть канал, чем читать подряд.
 const REOPEN_GAP: i64 = 256;

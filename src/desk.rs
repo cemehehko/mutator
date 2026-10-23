@@ -34,11 +34,11 @@ use crate::data::{At, Cmd, Edge, Ev, File, Index, Matches, Mutations, Place, Vie
 use crate::decode::{self, Node};
 use crate::edit::commit::{self, Target};
 use crate::edit::{Edits, Store, Summary};
+use crate::io::{Context, LuaMode, Msg, Open, Reader};
 use crate::lua::Filter;
 use crate::range::Border;
 use crate::scheme::{Kind, Sub};
 use crate::session::Session;
-use crate::tll::{Context, LuaMode, Msg, Open, Reader};
 
 /// Клавиша от любого вида.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1407,7 +1407,7 @@ impl Desk {
 
     /// Сбросить код редактора на шаблон по умолчанию (не применяя).
     pub fn reset_lua_to_default(&mut self) {
-        self.lua_code = crate::lua::transform_template();
+        self.lua_code = crate::lua::transform_template_for(self.file.info.backend);
         self.lua_cursor = 0;
         self.lua_scroll = 0;
         self.lua_reset_confirm = false;

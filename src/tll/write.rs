@@ -70,12 +70,6 @@ impl Writer {
         Ok(w)
     }
 
-    /// Создать файл `path` (существующий перезаписывается) — [`Writer::open`] с
-    /// `overwrite = true`.
-    pub fn create(ctx: &Context, path: &Path, scheme: &str, like: &Info) -> Result<Writer, String> {
-        Writer::open(ctx, path, scheme, like, true)
-    }
-
     /// Дописать сообщение.
     pub fn post(&mut self, m: &Msg) -> Result<(), String> {
         let msg = tll_msg_t {

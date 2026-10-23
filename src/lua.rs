@@ -12,7 +12,51 @@
 //! Ещё — [`transform_template`]: шаблон кода для режима модификации сообщений
 //! (Normal-режим tll-lua, `tll_on_data` вместо `tll_filter`).
 //!
-//! Наружу: [`Filter`], [`transform_template`].
+//! Другой бэкенд ([`crate::io::Driver`]) знает свой Lua-диалект:
+//! [`Filter::code_for`], [`Filter::expr_code_for`], [`transform_template_for`]
+//! спрашивают его код у бэкенда файла; без бэкенда — код TLL.
+//!
+//! Наружу: [`Filter`], [`tll_script`], [`transform_template`],
+//! [`transform_template_for`].
+
+use crate::io::Backend;
+
+/// Скрипт фильтра tll-lua: хуки открытия и закрытия, отбор типов, выражение —
+/// строка в строку как строит `tll-read --message … -f …`.
+pub fn tll_script(messages: &[String], expr: &str) -> String {
+    let mut code = vec![
+        "function tll_on_open(cfg)".to_string(),
+        "end".into(),
+        "function tll_on_close()".into(),
+        "end".into(),
+        "function tll_filter(seq, name, data, msgid, addr, time)".into(),
+    ];
+    if !messages.is_empty() {
+        let conds: Vec<_> = messages
+            .iter()
+            .map(|s| format!("name ~= \"{s}\""))
+            .collect();
+        code.push(format!(
+            "    if {} then return false end",
+            conds.join(" and ")
+        ));
+    }
+    if expr.trim().is_empty() {
+        code.push("    return true".into());
+    } else {
+        code.push(format!("    return {}", expr.trim()));
+    }
+    code.push("end".into());
+    code.join("\n")
+}
+
+/// Код фильтра у бэкенда `b`; бэкенда нет в сборке — код TLL.
+fn script(b: Backend, messages: &[String], expr: &str) -> String {
+    match crate::io::driver(b) {
+        Ok(d) => d.filter_code(messages, expr),
+        Err(_) => tll_script(messages, expr),
+    }
+}
 
 /// Условие отбора сообщений.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -36,55 +80,26 @@ impl Filter {
         self.messages.is_empty() && self.expr.trim().is_empty()
     }
 
-    /// Код для `lua.code`; `None` — фильтра нет, читать файл напрямую.
+    /// Код для `lua.code` (TLL); `None` — фильтра нет, читать файл напрямую.
     pub fn code(&self) -> Option<String> {
-        if self.is_empty() {
-            return None;
-        }
-        let mut code = vec![
-            "function tll_on_open(cfg)".to_string(),
-            "end".into(),
-            "function tll_on_close()".into(),
-            "end".into(),
-            "function tll_filter(seq, name, data, msgid, addr, time)".into(),
-        ];
-        if !self.messages.is_empty() {
-            let conds: Vec<_> = self
-                .messages
-                .iter()
-                .map(|s| format!("name ~= \"{s}\""))
-                .collect();
-            code.push(format!(
-                "    if {} then return false end",
-                conds.join(" and ")
-            ));
-        }
-        if self.expr.trim().is_empty() {
-            code.push("    return true".into());
-        } else {
-            code.push(format!("    return {}", self.expr.trim()));
-        }
-        code.push("end".into());
-        Some(code.join("\n"))
+        (!self.is_empty()).then(|| tll_script(&self.messages, &self.expr))
+    }
+
+    /// Код фильтра для Lua-линка бэкенда `b`.
+    pub fn code_for(&self, b: Backend) -> Option<String> {
+        (!self.is_empty()).then(|| script(b, &self.messages, &self.expr))
     }
 
     /// Код только из выражения (`f`/`t`), без отбора типов: его прогоняют
     /// пост-эвалом поверх уже прочитанных сообщений, когда типы отобраны в Rust
     /// по `msgid` (`agr:filter-post-eval`). `None` — выражения нет.
     pub fn expr_code(&self) -> Option<String> {
-        if self.expr.trim().is_empty() {
-            return None;
-        }
-        let code = vec![
-            "function tll_on_open(cfg)".to_string(),
-            "end".into(),
-            "function tll_on_close()".into(),
-            "end".into(),
-            "function tll_filter(seq, name, data, msgid, addr, time)".into(),
-            format!("    return {}", self.expr.trim()),
-            "end".into(),
-        ];
-        Some(code.join("\n"))
+        (!self.expr.trim().is_empty()).then(|| tll_script(&[], &self.expr))
+    }
+
+    /// Код только из выражения для Lua-линка бэкенда `b`.
+    pub fn expr_code_for(&self, b: Backend) -> Option<String> {
+        (!self.expr.trim().is_empty()).then(|| script(b, &[], &self.expr))
     }
 
     /// Пересечение: типы этого фильтра и оба выражения (поиск внутри фильтра).
@@ -157,6 +172,14 @@ function tll_on_data(seq, name, data)\n\
 end\n\
 "
     .to_string()
+}
+
+/// Шаблон transform у бэкенда `b`; бэкенда нет в сборке — шаблон TLL.
+pub fn transform_template_for(b: Backend) -> String {
+    match crate::io::driver(b) {
+        Ok(d) => d.transform_template(),
+        Err(_) => transform_template(),
+    }
 }
 
 #[cfg(test)]

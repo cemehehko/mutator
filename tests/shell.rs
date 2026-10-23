@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard, Once};
 use egui;
 use tui_patch::recent::Recent;
 use tui_patch::ui::Shell;
-use tui_patch::{session, tll};
+use tui_patch::{io, session};
 
 /// Корень крейта во время запуска: сборка могла идти в другом каталоге.
 fn root() -> PathBuf {
@@ -34,7 +34,7 @@ fn config() -> PathBuf {
     ONCE.call_once(|| {
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("MUTATOR_CONFIG_DIR", &dir);
-        tll::quiet();
+        io::quiet();
     });
     dir
 }
@@ -142,7 +142,10 @@ fn dropped_file_opens_over_placeholder_and_is_remembered() {
     let texts = w.drop_file(&lz4);
     assert_eq!(w.open_path(), Some(lz4.clone()));
     assert!(!has(&texts, "Перетащите файл датника"), "заглушка ушла");
-    assert_eq!(w.shell.recent().files.first(), std::fs::canonicalize(&lz4).ok().as_ref());
+    assert_eq!(
+        w.shell.recent().files.first(),
+        std::fs::canonicalize(&lz4).ok().as_ref()
+    );
     assert_eq!(
         Recent::load_from(&config()).files.first(),
         w.shell.recent().files.first(),

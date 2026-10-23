@@ -17,7 +17,7 @@
 //!
 //! Ещё: [`decimal`], [`time_point`].
 
-mod value;
+pub mod value;
 
 pub use value::{decimal, time_point, Value};
 
@@ -230,7 +230,7 @@ fn sub_value(raw: i128, sub: &Sub) -> Value {
     match sub {
         Sub::None => Value::Int(raw),
         Sub::Enum(e) => Value::Enum {
-            name: e.lookup(raw as i64).map(str::to_string),
+            name: e.name_of(raw as i64),
             raw: raw as i64,
         },
         Sub::Fixed(p) => Value::Dec {
@@ -400,7 +400,7 @@ fn optr(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tll"))]
 mod tests {
     use super::*;
 

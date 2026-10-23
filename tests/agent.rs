@@ -11,8 +11,8 @@ use tui_patch::agent::Act;
 use tui_patch::data::File;
 use tui_patch::desk::Desk;
 use tui_patch::edit::Edits;
+use tui_patch::io;
 use tui_patch::lua::Filter;
-use tui_patch::tll;
 
 fn root() -> PathBuf {
     std::env::var_os("CARGO_MANIFEST_DIR")
@@ -25,7 +25,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn open(name: &str, height: usize) -> Desk {
-    tll::quiet();
+    io::quiet();
     let mut d = Desk::open(File::open(&fixture(name)).unwrap(), Arc::new(|| {}));
     d.height = height;
     let t = Instant::now();
@@ -58,8 +58,8 @@ fn settle(d: &mut Desk) {
 }
 
 fn lua() -> bool {
-    tll::quiet();
-    let ok = tll::Context::new().ensure_lua();
+    io::quiet();
+    let ok = io::Context::new().ensure_lua(tui_patch::io::Backend::TLL);
     if !ok {
         eprintln!("нет tll-lua (TUI_PATCH_LUA) — проверки фильтра пропущены");
     }
@@ -67,8 +67,8 @@ fn lua() -> bool {
 }
 
 fn patch() -> bool {
-    tll::quiet();
-    let ok = tll::Context::new().ensure_patch();
+    io::quiet();
+    let ok = io::Context::new().ensure_patch(tui_patch::io::Backend::TLL);
     if !ok {
         eprintln!("нет tll-patch (TUI_PATCH_PATCH) — проверки правок пропущены");
     }

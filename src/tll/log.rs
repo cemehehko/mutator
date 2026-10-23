@@ -83,6 +83,10 @@ unsafe extern "C" fn configure(_: *mut tll_logger_impl_t, cfg: *const tll_config
 
 /// Поставить обработчик (один раз на процесс).
 pub fn install() {
+    // Без libtll перехватывать нечего; зовут после `Context::try_new`.
+    if api().is_err() {
+        return;
+    }
     ONCE.call_once(|| unsafe {
         PREV = tll_logger_impl_get();
         tll_logger_register(std::ptr::addr_of_mut!(IMPL));

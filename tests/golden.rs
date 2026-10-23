@@ -10,9 +10,9 @@ use std::path::Path;
 use serde_json::{json, Map, Value as J};
 use tui_patch::decode::{self, Node, Value};
 use tui_patch::dump::{self, Dump};
+use tui_patch::io::{Context, Open, Reader};
 use tui_patch::lua::Filter;
 use tui_patch::range::Range;
-use tui_patch::tll::{Context, Open, Reader};
 
 /// Корень крейта во время запуска: сборка могла идти в другом каталоге.
 fn root() -> std::path::PathBuf {
@@ -46,7 +46,7 @@ fn to_json(n: &Node) -> J {
 }
 
 fn check(dat: &Path, expected: &Path) -> usize {
-    tui_patch::tll::quiet();
+    tui_patch::io::quiet();
     let want: Vec<J> = serde_json::from_str(&std::fs::read_to_string(expected).unwrap()).unwrap();
     let want: HashMap<i64, &J> = want
         .iter()
@@ -97,7 +97,7 @@ fn decode_matches_python_tll_on_live_file() {
 /// (`tests/data/*.yaml` пишет `scripts/golden.py` его выводом), байт в байт.
 #[test]
 fn dump_prints_the_same_yaml_as_tll_read() {
-    tui_patch::tll::quiet();
+    tui_patch::io::quiet();
     let dir = root().join("tests/data");
     for name in ["plain", "lz4", "sparse"] {
         let d = Dump {
@@ -124,7 +124,7 @@ fn dump_prints_the_same_yaml_as_tll_read() {
 /// Диапазон `-s` и размер — как у tll-read: одна точка, `+N` с начала и до seq.
 #[test]
 fn dump_range_forms() {
-    tui_patch::tll::quiet();
+    tui_patch::io::quiet();
     let path = root().join("tests/data/sparse.dat");
     let run = |r: &str, size: bool| {
         let d = Dump {
@@ -151,7 +151,7 @@ fn dump_range_forms() {
 }
 
 fn dump_out(range: &str, f: impl FnOnce(Dump) -> Dump) -> String {
-    tui_patch::tll::quiet();
+    tui_patch::io::quiet();
     let d = f(Dump {
         path: root().join("tests/data/sparse.dat"),
         range: Range::parse(range).unwrap(),
@@ -199,7 +199,7 @@ fn dump_color_only_through_painter() {
 /// `agr:dump-stat` — границы seq, всего сообщений и счётчики типов по убыванию.
 #[test]
 fn stat_counts_messages_by_type() {
-    tui_patch::tll::quiet();
+    tui_patch::io::quiet();
     let path = root().join("tests/data/sparse.dat");
     let mut out = Vec::new();
     dump::stat(&path, &mut out).unwrap();
@@ -239,7 +239,7 @@ fn stat_counts_messages_by_type() {
 }
 
 fn patch_ready() -> bool {
-    let ok = tui_patch::tll::Context::new().ensure_patch();
+    let ok = tui_patch::io::Context::new().ensure_patch(tui_patch::io::Backend::TLL);
     if !ok {
         eprintln!("нет tll-patch (MUTATOR_PATCH) — проверки правки пропущены");
     }
@@ -271,7 +271,7 @@ fn dump_applies_edits_and_marks_changed_fields() {
 }
 
 fn lua_ready() -> bool {
-    let ok = tui_patch::tll::Context::new().ensure_lua();
+    let ok = tui_patch::io::Context::new().ensure_lua(tui_patch::io::Backend::TLL);
     if !ok {
         eprintln!("нет tll-lua (MUTATOR_LUA) — проверки transform пропущены");
     }

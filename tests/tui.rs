@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tui_patch::data::File;
 use tui_patch::desk::{Desk, Key};
-use tui_patch::tll;
+use tui_patch::io;
 use tui_patch::ui::tui::{apply, frame, grid::Grid, Act};
 
 /// Корень крейта во время запуска: сборка могла идти в другом каталоге.
@@ -16,7 +16,7 @@ fn root() -> std::path::PathBuf {
 }
 
 fn open() -> Desk {
-    tll::quiet();
+    io::quiet();
     let path = root().join("tests/data/lz4.dat");
     let mut d = Desk::open(File::open(&path).unwrap(), Arc::new(|| {}));
     settle(&mut d);
@@ -174,13 +174,14 @@ fn long_values_wrap_on_selected_field() {
 /// детали рядом показан исходный seq файла.
 #[test]
 fn changed_seq_is_red_and_detail_shows_original() {
-    if !tll::Context::new().ensure_lua() {
+    if !io::Context::new().ensure_lua(tui_patch::io::Backend::TLL) {
         eprintln!("нет tll-lua (TUI_PATCH_LUA) — проверка пропущена");
         return;
     }
     let mut d = open();
     d.set_transform(
-        "function tll_on_data(seq, name, data)\n    tll_callback(seq + 1000, name, data)\nend".into(),
+        "function tll_on_data(seq, name, data)\n    tll_callback(seq + 1000, name, data)\nend"
+            .into(),
     );
     settle(&mut d);
     d.key(Key::Enter);

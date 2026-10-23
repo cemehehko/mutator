@@ -1,5 +1,6 @@
 //! `mutator --dump`: сообщения текстом YAML, как печатает `tll-read`
-//! (`agr:same-as-tll-read`).
+//! (`agr:same-as-tll-read`). Бэкенд со своей печатью ([`crate::io::dump_line`])
+//! печатает сообщение строкой, а правки и размер — комментарием после неё.
 //!
 //! Нужен для сверки с tll-read и для скриптов: тот же диапазон `-s`, тот же
 //! фильтр `-f`/`--message`, тот же вид дерева. Кавычки — по правилам PyYAML для
@@ -27,10 +28,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::decode::{self, Node, Value};
+use crate::io::{Context, LuaMode, Msg, Open, Reader, Transformer};
 use crate::lua::Filter;
 use crate::range::{Border, Range};
 use crate::scheme::Scheme;
-use crate::tll::{Context, LuaMode, Msg, Open, Reader, Transformer};
 
 /// Сколько сообщений дифференцировать мутатором за один прогон.
 const BATCH: usize = 256;
@@ -48,12 +49,17 @@ pub struct Dump {
     pub edits: crate::edit::Edits,
     /// Код Lua-transform сессии — читать через `lua+`, изменённые поля помечать.
     pub transform: Option<String>,
+    /// Чем прочитан файл — от этого формат печати; ставит [`run`].
+    pub backend: crate::io::Backend,
 }
 
 /// Напечатать сообщения в `out`.
 pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
     let ctx = Context::new();
     let info = Reader::open(&ctx, &Open::file(&d.path))?.info();
+    let mut d = d.clone();
+    d.backend = info.backend;
+    let d = &d;
     let mut skip = 0u64;
     let mut count: Option<u64> = None;
     let mut last: Option<i64> = None;
@@ -84,7 +90,7 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
         open.lua_mode = Some(LuaMode::Transform);
     } else {
         // Как у tll-read: код фильтра прямо в канале.
-        open.lua = d.filter.code();
+        open.lua = d.filter.code_for(d.backend);
     }
     open = open.patch(patch);
     let mut r = match Reader::open(&ctx, &open) {
@@ -108,7 +114,7 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
         Some(code) if !fallback => match crate::data::File::open(&d.path) {
             Ok(f) => {
                 let url = f.scheme_url.clone().unwrap_or_default();
-                match Transformer::new(&ctx, code, &url) {
+                match Transformer::new(&ctx, f.info.backend, code, &url) {
                     Ok(tx) => Some((f, tx)),
                     Err(e) => {
                         eprintln!("mutator: transform: {e}");
@@ -135,14 +141,16 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
     let mut eval = if transforming && !d.filter.expr.trim().is_empty() {
         sh.as_ref()
             .and_then(|(f, _)| f.scheme_url.clone())
-            .and_then(|url| d.filter.expr_code().map(|code| (code, url)))
-            .and_then(|(code, url)| match Transformer::filter(&ctx, &code, &url) {
-                Ok(tf) => Some(tf),
-                Err(e) => {
-                    eprintln!("mutator: filter: {e}");
-                    None
-                }
-            })
+            .and_then(|url| d.filter.expr_code_for(info.backend).map(|code| (code, url)))
+            .and_then(
+                |(code, url)| match Transformer::filter(&ctx, info.backend, &code, &url) {
+                    Ok(tf) => Some(tf),
+                    Err(e) => {
+                        eprintln!("mutator: filter: {e}");
+                        None
+                    }
+                },
+            )
     } else {
         None
     };
@@ -219,8 +227,9 @@ fn print_batch(
         // Сырые сообщения пачки — по её seq: поток dump идёт через мутатор
         // построчно, исходного seq у него нет (смена seq в dump не ловится).
         let seqs: Vec<i64> = batch.iter().map(|m| m.seq).collect();
-        let shadowed = crate::data::fetch::by_seqs(ctx, &Open::file(&f.path), &seqs)
-            .and_then(|raw| crate::data::shadow(f, tx, &raw, &batch));
+        let shadowed =
+            crate::data::fetch::by_seqs(ctx, &Open::file(&f.path).backend(f.info.backend), &seqs)
+                .and_then(|raw| crate::data::shadow(f, tx, &raw, &batch));
         match shadowed {
             Ok(m) => mutations = m,
             Err(e) => eprintln!("mutator: transform: {e}"),
@@ -228,6 +237,29 @@ fn print_batch(
     }
     let w = |e: std::io::Error| e.to_string();
     for m in batch {
+        if let Some(line) = crate::io::dump_line(d.backend, scheme, &m) {
+            let line = line?;
+            let mut notes: Vec<String> = Vec::new();
+            if d.with_size {
+                notes.push(format!("size: {}", m.data.len()));
+            }
+            let mut marks: BTreeMap<String, String> = mutations.remove(&m.seq).unwrap_or_default();
+            if let Some(me) = d.edits.message(m.seq) {
+                for (p, e) in &me.fields {
+                    marks.insert(p.clone(), e.old.clone());
+                }
+            }
+            if !marks.is_empty() {
+                let list: Vec<String> = marks.iter().map(|(p, v)| format!("{p}={v}")).collect();
+                notes.push(format!("в файле: {}", list.join(", ")));
+            }
+            if notes.is_empty() {
+                writeln!(out, "{line}").map_err(w)?;
+            } else {
+                writeln!(out, "{line} # {}", notes.join("; ")).map_err(w)?;
+            }
+            continue;
+        }
         writeln!(out, "- seq: {}", m.seq).map_err(w)?;
         if d.with_size {
             writeln!(out, "  size: {}", m.data.len()).map_err(w)?;
@@ -534,6 +566,10 @@ fn paint(s: &str) -> String {
     const PLAIN: &str = "\x1b[37m";
     const RESET: &str = "\x1b[39;49;00m";
 
+    // Строка печати бэкенда (`{"name": …}`) — не дерево tll-read: без цвета.
+    if s.starts_with('{') {
+        return s.to_string();
+    }
     let mut out = String::new();
     let indented = s.len() - s.trim_start().len();
     out += &s[..indented];

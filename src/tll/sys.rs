@@ -4,6 +4,10 @@
 //! `tll/config.h`, `tll/logger.h`: нужно немного, а bindgen потянул бы libclang в
 //! каждую сборку. Раскладку структур держат тесты `convert.rs` на настоящих
 //! схемах — ошибка в смещении сразу ломает разбор.
+//!
+//! Функции не слинкованы: libtll грузится при первом [`api`]
+//! (`agr:backend-dlopen`, [`crate::io::dynlib`]); обёртки носят имена функций C.
+//! Путь к библиотеке можно задать в `MUTATOR_LIBTLL`.
 
 #![allow(non_camel_case_types, dead_code)]
 
@@ -222,12 +226,20 @@ pub struct tll_logger_impl_t {
     pub user: *mut c_void,
 }
 
-extern "C" {
-    pub fn tll_logger_register(imp: *mut tll_logger_impl_t) -> c_int;
-    pub fn tll_logger_impl_get() -> *const tll_logger_impl_t;
+/// Где искать libtll: полный путь в `MUTATOR_LIBTLL`, каталог pkg-config со
+/// сборки, Homebrew, системный поиск.
+fn load_lib() -> Result<libloading::Library, String> {
+    #[cfg(target_os = "macos")]
+    const NAMES: &[&str] = &["libtll.0.dylib", "libtll.dylib"];
+    #[cfg(not(target_os = "macos"))]
+    const NAMES: &[&str] = &["libtll.so.0", "libtll.so"];
+    crate::io::dynlib::open("MUTATOR_LIBTLL", option_env!("MUTATOR_TLL_LIBDIR"), NAMES)
 }
 
-extern "C" {
+crate::dynamic_api! {
+    loader = load_lib;
+    pub fn tll_logger_register(imp: *mut tll_logger_impl_t) -> c_int;
+    pub fn tll_logger_impl_get() -> *const tll_logger_impl_t;
     pub fn tll_channel_context_new(defaults: *mut tll_config_t) -> *mut tll_channel_context_t;
     pub fn tll_channel_context_free(ctx: *mut tll_channel_context_t);
     pub fn tll_channel_context_ref(ctx: *mut tll_channel_context_t) -> *mut tll_channel_context_t;
@@ -294,7 +306,10 @@ extern "C" {
 
     pub fn tll_channel_post(c: *mut tll_channel_t, msg: *const tll_msg_t, flags: c_int) -> c_int;
 
-    pub fn free(p: *mut c_void);
-
     pub fn tll_logger_set(name: *const c_char, len: c_int, level: c_int, subtree: c_int) -> c_int;
+}
+
+extern "C" {
+    /// libc: освободить строку, выделенную libtll ([`tll_scheme_dump`]).
+    pub fn free(p: *mut c_void);
 }

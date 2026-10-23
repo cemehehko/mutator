@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use egui;
 use tui_patch::data::File;
 use tui_patch::desk::Desk;
-use tui_patch::tll;
+use tui_patch::io;
 use tui_patch::ui::{App, Look};
 
 /// Корень крейта во время запуска: сборка могла идти в другом каталоге.
@@ -29,7 +29,7 @@ struct Win {
 
 impl Win {
     fn open() -> Win {
-        tll::quiet();
+        io::quiet();
         let path = root().join("tests/data/lz4.dat");
         let mut desk = Desk::open(File::open(&path).unwrap(), Arc::new(|| {}));
         let t = Instant::now();
@@ -250,7 +250,7 @@ fn window_table_keys_clicks_and_tui_look() {
 /// `f` ставит фокус в поле фильтра окна, Enter применяет выражение.
 #[test]
 fn window_filter_field() {
-    if !tll::Context::new().ensure_lua() {
+    if !io::Context::new().ensure_lua(tui_patch::io::Backend::TLL) {
         eprintln!("нет tll-lua — пропуск");
         return;
     }

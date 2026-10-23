@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use super::chunks::{self, Chunk};
 use super::File;
+use crate::io::{Context, Reader, Transformer};
 use crate::lua::Filter;
-use crate::tll::{Context, Reader, Transformer};
 
 /// Результат фильтра — растёт, пока идёт скан.
 #[derive(Debug, Default)]
@@ -86,6 +86,7 @@ struct Eval {
 
 /// Завод [`Eval`]: код выражения и схема файла (для имён в Lua).
 struct EvalFactory {
+    backend: crate::io::Backend,
     code: Option<String>,
     scheme_url: Option<String>,
 }
@@ -93,7 +94,7 @@ struct EvalFactory {
 impl EvalFactory {
     fn build(&self, ctx: &Context) -> Result<Eval, String> {
         let tf = match (&self.code, &self.scheme_url) {
-            (Some(code), Some(url)) => Some(Transformer::filter(ctx, code, url)?),
+            (Some(code), Some(url)) => Some(Transformer::filter(ctx, self.backend, code, url)?),
             _ => None,
         };
         Ok(Eval { tf })
@@ -157,7 +158,8 @@ pub fn filter(
     let list = chunks::even(begin, last, chunks::count(bytes, 16));
     let n = list.len().max(1);
     let factory = EvalFactory {
-        code: filter.expr_code(),
+        backend: f.info.backend,
+        code: filter.expr_code_for(f.info.backend),
         scheme_url: f.scheme_url.clone(),
     };
     chunks::run_state(
@@ -168,9 +170,10 @@ pub fn filter(
         |ctx, eval, c, halt| {
             // Трансформер не собрался — ошибка выражения; кусок отдаёт ошибку.
             let Some(eval) = eval else {
-                return Err(factory.build(ctx).err().unwrap_or_else(|| {
-                    "Lua недоступен: нет модуля tll-lua (MUTATOR_LUA)".into()
-                }));
+                return Err(factory
+                    .build(ctx)
+                    .err()
+                    .unwrap_or_else(|| "Lua недоступен: нет модуля tll-lua (MUTATOR_LUA)".into()));
             };
             chunk(ctx, f, filter, eval, c, halt)
         },
@@ -216,7 +219,8 @@ pub fn search(
         chunks::growing(from + 1, last, 4096, max, false)
     };
     let factory = EvalFactory {
-        code: filter.expr_code(),
+        backend: f.info.backend,
+        code: filter.expr_code_for(f.info.backend),
         scheme_url: f.scheme_url.clone(),
     };
     let mut found = None;
@@ -228,9 +232,10 @@ pub fn search(
         |ctx| factory.build(ctx).ok(),
         |ctx, eval, c, halt| {
             let Some(eval) = eval else {
-                return Err(factory.build(ctx).err().unwrap_or_else(|| {
-                    "Lua недоступен: нет модуля tll-lua (MUTATOR_LUA)".into()
-                }));
+                return Err(factory
+                    .build(ctx)
+                    .err()
+                    .unwrap_or_else(|| "Lua недоступен: нет модуля tll-lua (MUTATOR_LUA)".into()));
             };
             chunk(ctx, f, filter, eval, c, halt)
         },

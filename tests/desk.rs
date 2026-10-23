@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use tui_patch::data::File;
 use tui_patch::desk::{Desk, Focus, Key, PromptKind};
-use tui_patch::tll::{self, Context, LuaMode, Open, Reader};
+use tui_patch::io::{self, Context, LuaMode, Open, Reader};
 
 /// Корень крейта во время запуска: сборка могла идти в другом каталоге.
 fn root() -> std::path::PathBuf {
@@ -26,7 +26,7 @@ fn all_seqs(path: &Path) -> Vec<i64> {
 }
 
 fn open(name: &str, height: usize) -> Desk {
-    tll::quiet();
+    io::quiet();
     let mut d = Desk::open(File::open(&fixture(name)).unwrap(), Arc::new(|| {}));
     d.height = height;
     let t = Instant::now();
@@ -74,8 +74,8 @@ fn sel(d: &Desk) -> i64 {
 }
 
 fn lua() -> bool {
-    tll::quiet();
-    let ok = Context::new().ensure_lua();
+    io::quiet();
+    let ok = Context::new().ensure_lua(tui_patch::io::Backend::TLL);
     if !ok {
         eprintln!("нет tll-lua (TUI_PATCH_LUA) — проверки фильтра пропущены");
     }
@@ -496,7 +496,7 @@ function tll_on_data(seq, name, data)
     copy.n = 99999
     tll_callback(seq, name, copy)
 end"
-            .into(),
+        .into(),
     );
     settle(&mut d);
     key(&mut d, Key::Char('f'));
@@ -506,7 +506,11 @@ end"
     while !m.is_done() {
         settle(&mut d);
     }
-    assert_eq!(m.seqs.read().unwrap().len(), 80, "до переоткрытия — совпадения");
+    assert_eq!(
+        m.seqs.read().unwrap().len(),
+        80,
+        "до переоткрытия — совпадения"
+    );
 
     let s = d.session();
     let mut e = open("sparse", 8);
@@ -526,7 +530,10 @@ end"
         80,
         "первый скан видел transform"
     );
-    assert!(!e.rows.is_empty(), "строки видны сразу, без Enter на фильтре");
+    assert!(
+        !e.rows.is_empty(),
+        "строки видны сразу, без Enter на фильтре"
+    );
 }
 
 /// Клавиши TUI-редактора Lua правят по курсору: навигация, вставка и удаление
@@ -633,7 +640,8 @@ fn transform_seq_change_is_marked_with_original_seq() {
     let mut d = open("lz4", 8);
     let (seq0, body0) = first_raw("lz4");
     d.set_transform(
-        "function tll_on_data(seq, name, data)\n    tll_callback(seq + 1000, name, data)\nend".into(),
+        "function tll_on_data(seq, name, data)\n    tll_callback(seq + 1000, name, data)\nend"
+            .into(),
     );
     settle(&mut d);
     let shifted = seq0 + 1000;
@@ -903,7 +911,10 @@ fn page_down_to_the_end_keeps_the_last_row_at_the_bottom() {
         key(&mut d, Key::PageDown);
         // Пока дочитывается — пустоту под последней строкой оставлять нельзя.
         if d.at_end {
-            assert!(d.top + d.height <= d.rows.len(), "PgDn: пустота под последней");
+            assert!(
+                d.top + d.height <= d.rows.len(),
+                "PgDn: пустота под последней"
+            );
         }
     }
     settle(&mut d);
@@ -961,7 +972,10 @@ fn restore_with_dropping_transform_keeps_the_selected_row() {
         ..Default::default()
     };
     let d = restored(s);
-    assert!(d.rows.iter().all(|r| r.name == "Order"), "transform выбросил остальные");
+    assert!(
+        d.rows.iter().all(|r| r.name == "Order"),
+        "transform выбросил остальные"
+    );
     assert_eq!(sel(&d), want, "выбранная строка вернулась");
 }
 
@@ -1005,7 +1019,7 @@ fn restore_with_filter_and_transform_keeps_the_selected_row() {
 /// дописалось. `↓` на последней строке — то же.
 #[test]
 fn reload_keeps_position_and_reports_new_rows() {
-    use tui_patch::tll::{Info, Msg, Writer};
+    use tui_patch::io::{Info, Msg, Writer};
 
     let dir = std::env::temp_dir().join(format!("mutator-reload-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1133,7 +1147,7 @@ fn reload_keeps_position_and_reports_new_rows() {
 /// на свежем хвосте; следующий `End` догоняет конец, на спокойном — «не изменился».
 #[test]
 fn end_during_growth_lands_on_snapshot_end() {
-    use tui_patch::tll::{Info, Msg, Writer};
+    use tui_patch::io::{Info, Msg, Writer};
 
     let dir = std::env::temp_dir().join(format!("mutator-end-race-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1227,7 +1241,7 @@ fn end_during_growth_lands_on_snapshot_end() {
 /// без перечитывания — каким бы ни вырос файл на диске.
 #[test]
 fn end_from_middle_stays_within_the_open_snapshot() {
-    use tui_patch::tll::{Info, Msg, Writer};
+    use tui_patch::io::{Info, Msg, Writer};
 
     let dir = std::env::temp_dir().join(format!("mutator-end-middle-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

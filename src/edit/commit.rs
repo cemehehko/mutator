@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::tll::{Context, LuaMode, Open, Reader, Writer};
+use crate::io::{Context, LuaMode, Open, Reader, Writer};
 
 /// Куда ляжет результат.
 #[derive(Debug, Clone, PartialEq, Eq)]

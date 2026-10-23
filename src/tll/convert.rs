@@ -198,6 +198,7 @@ impl Conv {
         let r = Arc::new(Enum {
             name: cstr((*e).name),
             values,
+            flags: false,
         });
         self.enums.insert(e as usize, r.clone());
         r

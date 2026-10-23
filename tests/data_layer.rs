@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tui_patch::data::{fetch, At, Cmd, Edge, Ev, File, Place, View, Worker};
+use tui_patch::io::{self, Context, LuaMode, Msg, Open, Reader};
 use tui_patch::lua::Filter;
-use tui_patch::tll::{self, Context, LuaMode, Msg, Open, Reader};
 
 /// Корень крейта во время запуска: сборка могла идти в другом каталоге.
 fn root() -> std::path::PathBuf {
@@ -29,8 +29,8 @@ fn all(path: &Path) -> Vec<Msg> {
 }
 
 fn lua() -> bool {
-    tll::quiet();
-    let ok = Context::new().ensure_lua();
+    io::quiet();
+    let ok = Context::new().ensure_lua(tui_patch::io::Backend::TLL);
     if !ok {
         eprintln!("нет tll-lua (TUI_PATCH_LUA) — проверки фильтра пропущены");
     }
@@ -75,7 +75,7 @@ fn window(w: &Worker) -> (Place, Vec<i64>, Option<usize>, bool, bool) {
 /// `agr:sparse-index` `agr:tll-lifecycle-lock`
 #[test]
 fn index_and_windows_match_full_read() {
-    tll::quiet();
+    io::quiet();
     for name in ["plain", "lz4", "sparse"] {
         let path = fixture(name);
         let msgs = all(&path);
@@ -153,7 +153,7 @@ fn index_and_windows_match_full_read() {
 /// Сообщения по списку seq: подряд, с пропусками и с несуществующими seq.
 #[test]
 fn by_seqs_returns_exactly_requested() {
-    tll::quiet();
+    io::quiet();
     let path = fixture("sparse");
     let msgs = all(&path);
     let ctx = Context::new();
@@ -256,7 +256,7 @@ fn filter_and_search_match_single_pass() {
 /// (`agr:tll-lifecycle-lock`).
 #[test]
 fn open_past_end_does_not_hang() {
-    tll::quiet();
+    io::quiet();
     let path = fixture("plain");
     let ctx = Context::new();
     for _ in 0..3 {
@@ -384,17 +384,20 @@ fn transform_via_direct_pair_matches_full_pipeline() {
     let ctx = Context::new();
     let raw = all(&path).remove(0);
 
-    let out = tui_patch::tll::Transformer::new(&ctx, &passthrough(), &url)
-        .unwrap()
-        .transform(&raw)
-        .unwrap()
-        .expect("passthrough не выбрасывает сообщение");
+    let out =
+        tui_patch::io::Transformer::new(&ctx, tui_patch::io::Backend::TLL, &passthrough(), &url)
+            .unwrap()
+            .transform(&raw)
+            .unwrap()
+            .expect("passthrough не выбрасывает сообщение");
     assert_eq!(out.seq, raw.seq);
     assert_eq!(out.data, raw.data);
     let mut r = Reader::open(&ctx, &open_transform(&path, passthrough(), raw.seq)).unwrap();
     assert_eq!(r.next().unwrap().data, raw.data);
 
-    let mut tx = tui_patch::tll::Transformer::new(&ctx, &mutator(), &url).unwrap();
+    let mut tx =
+        tui_patch::io::Transformer::new(&ctx, tui_patch::io::Backend::TLL, &mutator(), &url)
+            .unwrap();
     let m = tx.transform(&raw).unwrap().expect("мутатор вернул тело");
     let mut r = Reader::open(&ctx, &open_transform(&path, mutator(), raw.seq)).unwrap();
     assert_eq!(
@@ -414,7 +417,9 @@ fn transform_reports_dropped_message_as_none() {
     let url = File::open(&path).unwrap().scheme_url.unwrap();
     let ctx = Context::new();
     let raw = all(&path).remove(0);
-    let mut tx = tui_patch::tll::Transformer::new(&ctx, &dropper(), &url).unwrap();
+    let mut tx =
+        tui_patch::io::Transformer::new(&ctx, tui_patch::io::Backend::TLL, &dropper(), &url)
+            .unwrap();
     assert!(tx.transform(&raw).unwrap().is_none());
 }
 
@@ -429,14 +434,16 @@ fn broken_lua_code_fails_transformer() {
     let url = File::open(&path).unwrap().scheme_url.unwrap();
     let ctx = Context::new();
     let raw = all(&path).remove(0);
-    assert!(tui_patch::tll::Transformer::new(
+    assert!(tui_patch::io::Transformer::new(
         &ctx,
+        tui_patch::io::Backend::TLL,
         "function tll_on_data(seq, name, data) end (",
         &url
     )
     .is_err());
-    let mut tx = tui_patch::tll::Transformer::new(
+    let mut tx = tui_patch::io::Transformer::new(
         &ctx,
+        tui_patch::io::Backend::TLL,
         "function tll_on_data(seq, name, data) error('boom') end",
         &url,
     )

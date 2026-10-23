@@ -10,14 +10,20 @@ name = "tui_patch"
 [[bin]]
 name = "mutator"
 path = "src/main.rs"
+required-features = ["tll"]
 
 [features]
-default = ["gui"]
+default = ["gui", "tll"]
+# Встроенный бэкенд TLL (libtll грузится при открытии TLL-файла). Без него
+# библиотека собирается для внешних бэкендов (`io::register`), бинарник — нет.
+tll = []
 # GUI (окно egui + TUI-в-окне по F2). Выключайте для сборки только TUI
 # (--tui) и --dump на серверах без X11/Wayland/Vulkan (Ubuntu 20.04+ headless).
 gui = ["dep:eframe"]
 
 [dependencies]
+# Библиотеки бэкендов грузятся при открытии файла своего формата.
+libloading = "0.8"
 # Терминальный запуск `mutator`: сырой режим, альтернативный экран.
 crossterm = "0.29"
 # Пресеты колонок пользователя (`~/.config/tui-patch/presets.toml`).
@@ -65,15 +71,41 @@ serde_json = "1"
 # libtll ставится системно (Homebrew, deb); путь берём у pkg-config.
 pkg-config = "0.3"
 
+# Сценарные тесты на TLL-эталонах (`tests/data/*.dat`) требуют бэкенд TLL.
+[[test]]
+name = "agent"
+path = "tests/agent.rs"
+required-features = ["tll"]
+
+[[test]]
+name = "data_layer"
+path = "tests/data_layer.rs"
+required-features = ["tll"]
+
+[[test]]
+name = "desk"
+path = "tests/desk.rs"
+required-features = ["tll"]
+
+[[test]]
+name = "golden"
+path = "tests/golden.rs"
+required-features = ["tll"]
+
+[[test]]
+name = "tui"
+path = "tests/tui.rs"
+required-features = ["tll"]
+
 # GUI-тесты (window.rs, probe_layout.rs) используют egui напрямую
 # для headless-проверок раскладки. Они не должны собираться при
 # --no-default-features (только TUI). Поэтому явно требуем фичу "gui".
 [[test]]
 name = "window"
 path = "tests/window.rs"
-required-features = ["gui"]
+required-features = ["gui", "tll"]
 
 [[test]]
 name = "probe_layout"
 path = "tests/probe_layout.rs"
-required-features = ["gui"]
+required-features = ["gui", "tll"]

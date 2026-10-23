@@ -562,7 +562,9 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
         self.desk.poll();
-        let _ = self.cmd.send(agent_::Cmd::UpdateSnap { snap: self.desk.make_snap() });
+        let _ = self.cmd.send(agent_::Cmd::UpdateSnap {
+            snap: self.desk.make_snap(),
+        });
         self.reopen(ctx);
         if self.checked.elapsed() >= std::time::Duration::from_secs(1) {
             self.checked = std::time::Instant::now();
@@ -619,7 +621,9 @@ impl App {
     /// Кадр окна без eframe — его зовут и тесты.
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         self.desk.poll();
-        let _ = self.cmd.send(agent_::Cmd::UpdateSnap { snap: self.desk.make_snap() });
+        let _ = self.cmd.send(agent_::Cmd::UpdateSnap {
+            snap: self.desk.make_snap(),
+        });
         self.agent.poll(&self.events);
         let mut keys = self.keys(ui);
         self.shoot(ui, &mut keys);
@@ -653,7 +657,8 @@ impl App {
             } else {
                 // Если transform-кода ещё нет — заготовка из шаблона.
                 if self.desk.lua_code.is_empty() {
-                    self.desk.lua_code = crate::lua::transform_template();
+                    self.desk.lua_code =
+                        crate::lua::transform_template_for(self.desk.file.info.backend);
                 }
                 self.look = Look::LuaEditor;
             }

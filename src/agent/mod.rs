@@ -228,7 +228,7 @@ pub struct ToolCtx {
     /// `ToolCtx::write_patch`]).
     pub patch: Option<PathBuf>,
     /// Свободный контекст libtll для чтения в этом потоке.
-    pub ctx: crate::tll::Context,
+    pub ctx: crate::io::Context,
     /// Число сообщений в файле: `None` — индекс ещё не готов.
     pub total: Option<usize>,
     /// Индекс, если готов, — для чтения по номеру строки.
@@ -263,7 +263,7 @@ pub struct ToolCtx {
 
 impl ToolCtx {
     /// Что открывать для чтения: файл с наложенными правками, если они есть.
-    fn src(&self) -> crate::tll::Open {
+    fn src(&self) -> crate::io::Open {
         self.file.source()
     }
 
@@ -271,7 +271,7 @@ impl ToolCtx {
     /// одну и ту же картину.
     fn write_patch(&mut self, edits: &crate::edit::Edits) -> Result<(), String> {
         // Читать через `patch+` умеет tll-patch; без модуля правку не проверить.
-        if !self.ctx.ensure_patch() {
+        if !self.ctx.ensure_patch(self.file.info.backend) {
             return Err("нет tll-patch: правки недоступны".into());
         }
         self.patch = self.store.write(edits)?;
@@ -414,7 +414,7 @@ async fn worker(
         gen,
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         patch: None,
-        ctx: crate::tll::Context::new(),
+        ctx: crate::io::Context::new(),
         total: None,
         index: None,
         acts: Some(acts),
@@ -1278,7 +1278,7 @@ fn send_context(ev_tx: &Sender<Ev>, state: &State, dialog_id: &str) {
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tll"))]
 mod tests {
     use super::*;
 

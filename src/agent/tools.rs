@@ -24,9 +24,9 @@ use super::{Act, ToolCtx};
 use crate::data::fetch;
 use crate::decode;
 use crate::dump;
+use crate::io::{Msg, Reader, Transformer};
 use crate::lua::Filter;
 use crate::scheme::{Kind, Scheme};
-use crate::tll::{Msg, Reader, Transformer};
 
 /// Сколько сообщений отдаём по умолчанию и не больше скольких — по просьбе.
 const READ_DEFAULT: usize = 10;
@@ -524,12 +524,15 @@ fn find(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
         .ok_or("файл пуст")?;
     let count = (int(args, "count").unwrap_or(READ_DEFAULT as i64).max(1) as usize).min(READ_MAX);
     let last = ctx.file.info.seq_last.unwrap_or(from);
-    ctx.ctx.ensure_lua();
+    ctx.ctx.ensure_lua(ctx.file.info.backend);
     let filter = Filter::expr(expr);
     // Выражение гоняем пост-эвалом поверх transform+правок (`agr:filter-post-eval`).
-    let code = filter.expr_code().expect("есть expr");
+    let code = filter
+        .expr_code_for(ctx.file.info.backend)
+        .expect("есть expr");
     let mut tf = Transformer::filter(
         &ctx.ctx,
+        ctx.file.info.backend,
         &code,
         ctx.file
             .scheme_url
@@ -600,7 +603,7 @@ fn count(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
             None => Err("нужен type или expr: индекс ещё не готов".into()),
         };
     }
-    ctx.ctx.ensure_lua();
+    ctx.ctx.ensure_lua(ctx.file.info.backend);
     let last = ctx.file.info.seq_last.unwrap_or(0);
     let begin = ctx.file.info.seq_begin.unwrap_or(0);
     // Скан по флагу воркера: прерванный ход останавливает и его
@@ -676,7 +679,11 @@ fn view_state(ctx: &mut ToolCtx) -> Result<String, String> {
     let edits = if ctx.edits.is_empty() {
         "none".into()
     } else {
-        format!("{} messages, {} fields", ctx.edits.messages(), ctx.edits.fields())
+        format!(
+            "{} messages, {} fields",
+            ctx.edits.messages(),
+            ctx.edits.fields()
+        )
     };
     if !ctx.edits.is_empty() {
         ctx.act(Act::MarkSynced);
@@ -894,7 +901,7 @@ fn check(ctx: &ToolCtx, seq: i64) -> Result<Msg, String> {
     if let Some(e) = r.error() {
         return Err(e);
     }
-    if let Some(e) = crate::tll::log::take() {
+    if let Some(e) = crate::io::take_error() {
         return Err(e);
     }
     match m {
@@ -907,7 +914,7 @@ fn check(ctx: &ToolCtx, seq: i64) -> Result<Msg, String> {
 
 /// Контекст инструментов на эталонном файле — для тестов этого модуля и
 /// проверок хода агента.
-#[cfg(test)]
+#[cfg(all(test, feature = "tll"))]
 pub(crate) fn tests_ctx() -> ToolCtx {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/plain.dat");
     let file = crate::data::File::open(&path).unwrap();
@@ -916,7 +923,7 @@ pub(crate) fn tests_ctx() -> ToolCtx {
         gen: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         patch: None,
-        ctx: crate::tll::Context::new(),
+        ctx: crate::io::Context::new(),
         total: None,
         index: None,
         acts: None,
@@ -933,7 +940,7 @@ pub(crate) fn tests_ctx() -> ToolCtx {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tll"))]
 mod tests {
     use super::*;
     use crate::agent::ToolCtx;

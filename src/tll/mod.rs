@@ -15,12 +15,17 @@
 //!
 //! Файлы: `log.rs` — ошибки журнала libtll в текст, `sys.rs` — сырые объявления C API, `convert.rs` — перенос
 //! `tll_scheme_t` в [`crate::scheme::Scheme`], `write.rs` — запись нового файла,
-//! `transform.rs` — прогон тел через Lua без чтения (`lua+direct`).
+//! `transform.rs` — прогон тел через Lua без чтения (`lua+direct`), `driver.rs` —
+//! TLL как бэкенд фасада (`Driver`).
 //!
-//! Наружу: [`Context`], [`Pooled`], [`Reader`], [`Open`], [`LuaMode`], [`Msg`], [`Info`],
-//! [`Writer`], [`Transformer`], [`quiet`], [`load_scheme`], `lifecycle` (внутри модуля).
+//! Бэкенд TLL фасада [`crate::io`]: общие типы ([`Open`], [`Msg`], [`Info`],
+//! [`LuaMode`]) объявлены там, здесь — только их чтение и запись libtll.
+//!
+//! Наружу: [`Context`], [`Reader`], [`Writer`], [`Transformer`], [`driver`], [`quiet`],
+//! [`load_scheme`], [`log`], `lifecycle` (внутри модуля).
 
 mod convert;
+pub mod driver;
 pub mod log;
 pub mod sys;
 mod transform;
@@ -33,10 +38,10 @@ pub use write::Writer;
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_int, c_void};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub use crate::io::{Info, LuaMode, Msg, Open};
 use crate::scheme::Scheme;
 use sys::*;
 
@@ -58,6 +63,10 @@ pub fn load_scheme(url: &str) -> Option<Scheme> {
 /// Приглушить журнал libtll до ошибок: info-строки на каждое открытие канала
 /// мешают и выводу `--dump`, и терминалу.
 pub fn quiet() {
+    // Нет libtll — нечего приглушать: TLL-файлы откроются с ошибкой загрузки.
+    if sys::api().is_err() {
+        return;
+    }
     let name = b"tll";
     unsafe {
         tll_logger_set(
@@ -78,11 +87,15 @@ pub struct Context {
 unsafe impl Send for Context {}
 
 impl Context {
-    pub fn new() -> Self {
+    /// Контекст или текст ошибки — для фасада [`crate::io`].
+    pub fn try_new() -> Result<Self, String> {
+        sys::api()?;
         let _g = lifecycle();
         let ptr = unsafe { tll_channel_context_new(std::ptr::null_mut()) };
-        assert!(!ptr.is_null(), "tll_channel_context_new");
-        Context { ptr }
+        if ptr.is_null() {
+            return Err("не создался контекст libtll".into());
+        }
+        Ok(Context { ptr })
     }
 
     /// Загрузить модуль каналов (`.../tll-lua` — путь без `lib` и расширения).
@@ -125,118 +138,11 @@ impl Context {
     }
 }
 
-/// Контекст из общего пула: схема файла, разобранная при первом открытии,
-/// кэшируется в контексте, и повторные сканы её не разбирают заново (разбор —
-/// десятки мс и идёт под замком жизненного цикла).
-pub struct Pooled(Option<Context>);
-
-static POOL: std::sync::Mutex<Vec<Context>> = std::sync::Mutex::new(Vec::new());
-
-impl Context {
-    pub fn pooled() -> Pooled {
-        let c = POOL.lock().unwrap_or_else(|e| e.into_inner()).pop();
-        Pooled(Some(c.unwrap_or_default()))
-    }
-}
-
-impl std::ops::Deref for Pooled {
-    type Target = Context;
-    fn deref(&self) -> &Context {
-        self.0.as_ref().unwrap()
-    }
-}
-
-impl Drop for Pooled {
-    fn drop(&mut self) {
-        if let Some(c) = self.0.take() {
-            POOL.lock().unwrap_or_else(|e| e.into_inner()).push(c);
-        }
-    }
-}
-
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Drop for Context {
     fn drop(&mut self) {
         let _g = lifecycle();
         unsafe { tll_channel_context_free(self.ptr) };
     }
-}
-
-/// Режим Lua-канала.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LuaMode {
-    /// `tll_filter` — только отбор сообщений. Остался для `--dump`
-    /// (печать как `tll-read -f`); экранный фильтр и поиск им не пользуются.
-    Filter,
-    /// `tll_on_data` — получает каждое сообщение, может менять и слать дальше.
-    Transform,
-}
-
-/// Что открыть.
-#[derive(Debug, Clone, Default)]
-pub struct Open {
-    pub path: PathBuf,
-    /// Первое сообщение — с seq не меньше этого; `None` — с начала файла.
-    pub seq: Option<i64>,
-    /// Код Lua для префикса `lua+` (transform — [`LuaMode::Transform`], либо
-    /// фильтр для `--dump`).
-    pub lua: Option<String>,
-    /// Режим Lua-канала; `None` при `lua` — Filter (как у `--dump`).
-    pub lua_mode: Option<LuaMode>,
-    /// Не копировать тела: индексу хватает seq и msgid.
-    pub meta_only: bool,
-    /// yaml правок tll-patch — читать через префикс `patch+`.
-    pub patch: Option<PathBuf>,
-}
-
-impl Open {
-    pub fn file(path: impl AsRef<Path>) -> Self {
-        Open {
-            path: path.as_ref().to_path_buf(),
-            ..Default::default()
-        }
-    }
-    pub fn at(mut self, seq: i64) -> Self {
-        self.seq = Some(seq);
-        self
-    }
-    pub fn filter(mut self, code: Option<String>) -> Self {
-        self.lua = code;
-        self
-    }
-    pub fn meta(mut self) -> Self {
-        self.meta_only = true;
-        self
-    }
-    pub fn patch(mut self, yaml: Option<PathBuf>) -> Self {
-        self.patch = yaml;
-        self
-    }
-}
-
-/// Сообщение из файла: тело скопировано, канал его не держит.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Msg {
-    pub seq: i64,
-    pub msgid: i32,
-    pub data: Vec<u8>,
-}
-
-/// Сведения о файле из конфига канала.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Info {
-    /// Первый и последний seq; `None` — файл пуст.
-    pub seq_begin: Option<i64>,
-    pub seq_last: Option<i64>,
-    pub block: Option<String>,
-    pub compression: Option<String>,
-    /// Версия формата файла — новый файл пишется той же.
-    pub version: Option<String>,
 }
 
 #[derive(Default)]
@@ -450,6 +356,7 @@ impl Reader {
         let file = unsafe { file_channel(self.ch) };
         let get = |k: &str| unsafe { config_get(file, k) };
         Info {
+            backend: crate::io::Backend::TLL,
             seq_begin: get("info.seq-begin").and_then(|s| s.parse().ok()),
             seq_last: get("info.seq").and_then(|s| s.parse().ok()),
             block: get("info.block"),

@@ -1,6 +1,6 @@
 //! Схема данных в своих типах Rust — копия `tll_scheme_t` после открытия файла.
 //!
-//! Схему читает libtll ([`crate::tll::Reader::scheme`]); здесь — только модель,
+//! Схему читает libtll ([`crate::io::Reader::scheme`]); здесь — только модель,
 //! которую разбор ([`crate::decode`]) и интерфейс читают без FFI и между потоками.
 //! Вложенные сообщения лежат в общем списке [`Scheme::structs`], поле ссылается на
 //! них номером [`Kind::Message`]: так модель простая и без циклов владения.
@@ -73,6 +73,21 @@ impl Int {
             Int::U64 => "uint64",
         }
     }
+
+    /// Размер в байтах.
+    pub fn size(self) -> usize {
+        match self {
+            Int::I8 | Int::U8 => 1,
+            Int::I16 | Int::U16 => 2,
+            Int::I32 | Int::U32 => 4,
+            Int::I64 | Int::U64 => 8,
+        }
+    }
+
+    /// Знаковый ли тип.
+    pub fn signed(self) -> bool {
+        matches!(self, Int::I8 | Int::I16 | Int::I32 | Int::I64)
+    }
 }
 
 /// Разрешение времени `time_point`/`duration`: множитель к наносекундам.
@@ -117,6 +132,8 @@ impl TimeRes {
 pub struct Enum {
     pub name: String,
     pub values: Vec<(String, i64)>,
+    /// Значения — биты (опция схемы `flags`): число — их сумма.
+    pub flags: bool,
 }
 
 impl Enum {
@@ -125,6 +142,30 @@ impl Enum {
             .iter()
             .find(|(_, x)| *x == v)
             .map(|(n, _)| n.as_str())
+    }
+
+    /// Имя значения; у флагов — выставленные биты через ` | ` по возрастанию.
+    /// `None` — имени нет (или у флагов остались биты без имени).
+    pub fn name_of(&self, v: i64) -> Option<String> {
+        if let Some(n) = self.lookup(v) {
+            return Some(n.to_string());
+        }
+        if !self.flags || v == 0 {
+            return None;
+        }
+        let mut bits: Vec<_> = self
+            .values
+            .iter()
+            .filter(|(_, x)| *x != 0 && v & x == *x)
+            .collect();
+        bits.sort_by_key(|(_, x)| *x);
+        let covered = bits.iter().fold(0, |a, (_, x)| a | x);
+        (covered == v).then(|| {
+            bits.iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
     }
 }
 

@@ -46,9 +46,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::decode;
 use crate::edit::commit::{self, Target};
+use crate::io::{Context, Info, LuaMode, Msg, Open, Reader, Transformer};
 use crate::lua::Filter;
 use crate::scheme::Scheme;
-use crate::tll::{Context, Info, LuaMode, Msg, Open, Reader, Transformer};
 
 /// seq → пути полей, изменившиеся после мутатора: путь → значение в файле, до
 /// мутатора (`agr:transform-shadow`). Пустая карта у seq — тело менялось, но
@@ -89,7 +89,9 @@ impl File {
     /// Что открывать для чтения: файл с правками, без Lua — вид показывает файл
     /// как есть (`agr:transform-shadow`).
     pub fn source(&self) -> Open {
-        Open::file(&self.path).patch(self.patch.clone())
+        Open::file(&self.path)
+            .backend(self.info.backend)
+            .patch(self.patch.clone())
     }
 
     /// Что открывать для чтения тел в виде: тот же `patch+file`, но с transform
@@ -97,7 +99,7 @@ impl File {
     /// фиксации (`agr:transform-shadow`). Порядок префиксов — `patch+lua+file`:
     /// ручная правка ложится поверх мутации скрипта.
     pub fn source_transform(&self) -> Open {
-        let mut o = Open::file(&self.path);
+        let mut o = Open::file(&self.path).backend(self.info.backend);
         if self.transforming() {
             o.lua = self.lua.clone();
             o.lua_mode = self.lua_mode;
@@ -627,7 +629,7 @@ fn check(ctx: &Context, src: &Open, seq: i64) -> Result<Msg, String> {
     }
     // Старый tll-patch на неверном значении только пишет в журнал и отдаёт
     // сообщение без правки: ошибка журнала — тоже отказ.
-    if let Some(e) = crate::tll::log::take() {
+    if let Some(e) = crate::io::take_error() {
         return Err(e);
     }
     match m {
@@ -688,7 +690,7 @@ fn transformer<'a>(
         .scheme_url
         .clone()
         .ok_or("схема файла не читается — мутатору не с чем работать")?;
-    *cur = Some((Transformer::new(ctx, &code, &url)?, key));
+    *cur = Some((Transformer::new(ctx, f.info.backend, &code, &url)?, key));
     Ok(Some(&mut cur.as_mut().unwrap().0))
 }
 
@@ -751,7 +753,7 @@ pub(crate) fn raw_window(
     f: &File,
     load: &dyn Fn(&Open) -> Result<Vec<Msg>, String>,
 ) -> Result<Vec<Msg>, String> {
-    load(&Open::file(&f.path))
+    load(&Open::file(&f.path).backend(f.info.backend))
 }
 
 /// Аргументы чтения окна: контекст libtll, файл и мутатор (если включён).
@@ -784,7 +786,12 @@ fn window(r: Read, view: &View, idx: Option<&Index>, at: At, n: usize) -> Result
             };
             let (rows, fallback_err) = read_with_fallback(f, &load)?;
             let first_row = match (idx, rows.first()) {
-                (Some(i), Some(m)) => Some(fetch::row_of(ctx, &Open::file(&f.path), i, m.seq)?),
+                (Some(i), Some(m)) => Some(fetch::row_of(
+                    ctx,
+                    &Open::file(&f.path).backend(f.info.backend),
+                    i,
+                    m.seq,
+                )?),
                 _ => None,
             };
             let at_start = rows.first().is_none_or(|m| m.seq <= begin);
@@ -915,15 +922,20 @@ fn extend(
                     terr,
                 ))
             } else {
-                let load = |src: &Open| {
-                    fetch::before_seq(ctx, src, edge.seq, n, f.begin())
-                };
+                let load = |src: &Open| fetch::before_seq(ctx, src, edge.seq, n, f.begin());
                 let (rows, fallback_err) = read_with_fallback(f, &load)?;
                 let first = edge.row.and_then(|r| r.checked_sub(rows.len()));
                 let first = first.or_else(|| {
                     idx.and_then(|i| {
-                        rows.first()
-                            .and_then(|m| fetch::row_of(ctx, &Open::file(&f.path), i, m.seq).ok())
+                        rows.first().and_then(|m| {
+                            fetch::row_of(
+                                ctx,
+                                &Open::file(&f.path).backend(f.info.backend),
+                                i,
+                                m.seq,
+                            )
+                            .ok()
+                        })
                     })
                 });
                 let at_start = rows.len() < n || rows.first().is_some_and(|m| m.seq <= f.begin());
@@ -958,9 +970,7 @@ fn extend(
                 ))
             } else {
                 let from = row.saturating_sub(n);
-                let load = |src: &Open| {
-                    fetch::by_seqs(ctx, src, &m.slice(from, row - from))
-                };
+                let load = |src: &Open| fetch::by_seqs(ctx, src, &m.slice(from, row - from));
                 let (rows, fallback_err) = read_with_fallback(f, &load)?;
                 let (mutated, terr) = shadow_after(fallback_err, f, tx, &rows, &load);
                 Ok(reply(

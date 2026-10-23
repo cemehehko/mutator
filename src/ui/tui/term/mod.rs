@@ -223,7 +223,8 @@ fn drive(
                             agent_look = false;
                         } else {
                             if d.lua_code.is_empty() {
-                                d.lua_code = crate::lua::transform_template();
+                                d.lua_code =
+                                    crate::lua::transform_template_for(d.file.info.backend);
                             }
                             lua_look = true;
                             agent_look = false;

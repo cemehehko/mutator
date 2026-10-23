@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use super::chunks::{self, Chunk};
-use crate::tll::{Context, Open, Reader};
+use crate::io::{Context, Open, Reader};
 
 /// Шаг контрольных точек: дойти от точки до любой строки — не больше стольких чтений.
 pub const STEP: usize = 1024;

@@ -10,8 +10,8 @@ use tui_patch::data::{fetch, File};
 use tui_patch::decode;
 use tui_patch::desk::{CommitMode, Desk, Focus, Key, PromptKind};
 use tui_patch::edit::{Edits, Store};
+use tui_patch::io::{self, Context, Msg, Open, Reader};
 use tui_patch::lua::Filter;
-use tui_patch::tll::{self, Context, Msg, Open, Reader};
 
 fn root() -> PathBuf {
     std::env::var_os("CARGO_MANIFEST_DIR")
@@ -30,8 +30,8 @@ fn copy(test: &str) -> PathBuf {
 }
 
 fn patch() -> bool {
-    tll::quiet();
-    let ok = Context::new().ensure_patch();
+    io::quiet();
+    let ok = Context::new().ensure_patch(tui_patch::io::Backend::TLL);
     if !ok {
         eprintln!("нет tll-patch (MUTATOR_PATCH) — проверки правки пропущены");
     }
@@ -39,7 +39,7 @@ fn patch() -> bool {
 }
 
 fn lua() -> bool {
-    Context::new().ensure_lua()
+    Context::new().ensure_lua(tui_patch::io::Backend::TLL)
 }
 
 fn all(path: &Path) -> Vec<Msg> {

@@ -3,7 +3,7 @@
 //! долями 3/6/9 знаков по самому значению, длительность — число с суффиксом.
 //!
 //! Наружу: [`Value`], [`double`], [`bytes`], [`decimal`], [`decimal128`],
-//! [`time_point`].
+//! [`time_point`], [`civil`] (дни от эпохи — дата, для печати бэкендов).
 
 use crate::scheme::TimeRes;
 
@@ -177,7 +177,7 @@ pub fn time_point(ns: i128) -> String {
 }
 
 /// Дни от эпохи → (год, месяц, день); алгоритм Хиннанта.
-fn civil(z: i64) -> (i64, u32, u32) {
+pub fn civil(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
