@@ -1,0 +1,79 @@
+[package]
+name = "tll-mutator"
+version = "0.0.10"
+edition = "2021"
+description = "Просмотр датников TLL: таблица сообщений, фильтр, поиск — в окне и в терминале"
+
+[lib]
+name = "tui_patch"
+
+[[bin]]
+name = "mutator"
+path = "src/main.rs"
+
+[features]
+default = ["gui"]
+# GUI (окно egui + TUI-в-окне по F2). Выключайте для сборки только TUI
+# (--tui) и --dump на серверах без X11/Wayland/Vulkan (Ubuntu 20.04+ headless).
+gui = ["dep:eframe"]
+
+[dependencies]
+# Терминальный запуск `mutator`: сырой режим, альтернативный экран.
+crossterm = "0.29"
+# Пресеты колонок пользователя (`~/.config/tui-patch/presets.toml`).
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+# Режим агента: OpenAI-совместимый API. TLS — rustls с встроенными корнями,
+# чтобы сборка в Docker не зависела от OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+# Поток агента: асинхронный HTTP в отдельном потоке, каналы команд и событий.
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+futures-util = "0.3"
+# Транспорт SSE поверх `reqwest`: переводы строк, многострочный `data:`,
+# комментарии — по стандарту; payload кадра разбираем свой.
+eventsource-stream = "0.2"
+# Тело запросов и ответов LLM, схемы инструментов.
+serde_json = "1"
+
+# Общие типы цветов/шрифтов из egui используются и в TUI (терминал),
+# и в окне. Само eframe (с wgpu) тянется только при фиче "gui".
+egui = "0.35"
+
+# Окно (опционально). Только настольные системы.
+eframe = { version = "0.35", optional = true, default-features = false, features = ["default_fonts", "wgpu"] }
+
+# Под Linux winit без x11/wayland не собирается; окно там не целевое, но
+# библиотека и тесты должны собираться (проверки идут в Docker).
+[target.'cfg(all(target_os = "linux", feature = "gui"))'.dependencies]
+eframe = { version = "0.35", optional = true, default-features = false, features = ["default_fonts", "wgpu", "x11"] }
+
+# Родное меню и диалог выбора файла — только macOS (на Linux у `rfd` тянется
+# gtk3/portal, а окно там не целевое). Подключаются кодом под `feature = "gui"`.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.21"
+rfd = "0.17"
+
+[dev-dependencies]
+# Эталоны python-tll лежат в JSON (`tests/data/*.json`).
+serde_json = "1"
+
+[build-dependencies]
+# libtll ставится системно (Homebrew, deb); путь берём у pkg-config.
+pkg-config = "0.3"
+
+# GUI-тесты (window.rs, probe_layout.rs) используют egui напрямую
+# для headless-проверок раскладки. Они не должны собираться при
+# --no-default-features (только TUI). Поэтому явно требуем фичу "gui".
+[[test]]
+name = "window"
+path = "tests/window.rs"
+required-features = ["gui"]
+
+[[test]]
+name = "probe_layout"
+path = "tests/probe_layout.rs"
+required-features = ["gui"]

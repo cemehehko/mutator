@@ -1,0 +1,22 @@
+Source: tll-mutator
+Section: utils
+Priority: optional
+Maintainer: Andrew <cemehehko@mail.ru>
+Build-Depends: debhelper (>= 10), pkg-config, libtll-dev (>= 0.4), libtll-lua, libtll-patch, ca-certificates
+Standards-Version: 4.5.0
+Rules-Requires-Root: no
+
+Package: tll-mutator
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libtll0 (>= 0.4), libtll-lua, libtll-patch
+Replaces: tui-patch, mutator
+Breaks: tui-patch, mutator
+Description: TUI viewer and editor for TLL data files (terminal only).
+ mutator (tll-mutator) shows TLL capture files (*.dat) in a table with filtering and
+ search using the same Lua engine as tll-read. It supports large files,
+ sessions, and preparing edits that are committed via tll-patch.
+ .
+ This build provides only the terminal (TUI) interface and
+ non-interactive dump mode. No GUI dependencies.
+ .
+ See also: tll-read(1), tll-patch(1).

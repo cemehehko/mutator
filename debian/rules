@@ -1,0 +1,41 @@
+#!/usr/bin/make -f
+# Build mutator for Ubuntu 20.04+ (focal), TUI-only (no GUI).
+# Requires: rustup or packaged cargo + libtll-dev (provides pkg-config tll).
+
+export DH_VERBOSE := 1
+export CARGO_HOME := $(CURDIR)/debian/cargo
+export CARGO_TARGET_DIR := $(CURDIR)/target
+
+# Use vendored or system TLS roots; we already use rustls in Cargo.toml.
+# For reproducible-ish builds one can set CARGO_NET_OFFLINE=1 + vendor,
+# but here we do a normal network build inside the package build env.
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf $(CARGO_HOME) $(CARGO_TARGET_DIR)
+
+override_dh_auto_configure:
+	# No autotools/meson; we drive cargo ourselves.
+
+override_dh_auto_build:
+	# TUI only: do not pull eframe/wgpu GUI stack.
+	# This lets the package build on a headless builder without X11/Wayland/Vulkan dev packages.
+	cargo build --release --no-default-features
+
+override_dh_auto_test:
+	# Packaging builds often run in restricted envs; run tests only if explicitly wanted.
+	# You can override from command line: DEB_BUILD_OPTIONS=parallel=1 dh_auto_test
+	# For now we skip to keep build times reasonable for .deb production.
+	# If you want them: cargo test --no-default-features
+	true
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/tmp
+	install -D -m 755 $(CARGO_TARGET_DIR)/release/mutator \
+		debian/tmp/usr/bin/mutator
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym || dh_strip

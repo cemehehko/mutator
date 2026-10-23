@@ -1,0 +1,4 @@
+/target
+*.dat
+!tests/data/*.dat
+.DS_Store
