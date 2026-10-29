@@ -5,8 +5,9 @@
 //! Тяжёлое отдаётся не целиком, а сводкой плюс выборкой окнами — как в black-d.
 //!
 //! Пачковый инструмент ([`needs_confirm`]) не трогает файл: [`prepare`]
-//! собирает все правки в кандидата, проверяет прогоном tll-patch и отдаёт
-//! человеку одну сводку; [`apply_batch`] применяет пачку целиком одним
+//! собирает все правки в кандидата — поля и состав потока (удаление, смена
+//! типа, вставка; `agr:stream-ops`), — проверяет прогоном tll-patch и отдаёт
+//! человеку одну сводку с прогнозом последнего seq (`agr:seq-forecast`); [`apply_batch`] применяет пачку целиком одним
 //! [`Act::Sync`]. Фиксацию агент не делает вовсе (`agr:agent-no-write`): про
 //! `w` ему напоминает системный промпт, инструмента для этого нет.
 //!
@@ -31,6 +32,9 @@ use crate::scheme::{Kind, Scheme};
 /// Сколько сообщений отдаём по умолчанию и не больше скольких — по просьбе.
 const READ_DEFAULT: usize = 10;
 const READ_MAX: usize = 50;
+/// Сколько сообщений читает за раз скан `search_messages`; между кусками
+/// смотрится флаг прерывания.
+const SCAN_CHUNK: usize = 1024;
 
 /// Реестр инструментов для запроса к модели.
 pub fn build_tools() -> Vec<Value> {
@@ -232,14 +236,15 @@ pub fn build_tools() -> Vec<Value> {
         func(
             "set_columns",
             "Set the table columns shown in the viewer. Each element is a field path \
-             (e.g. \"header.status\") or a preset name.",
+             (e.g. \"header.status\"), a preset name, or \"#data\" for the message body \
+             size in bytes.",
             json!({
                 "type": "object",
                 "properties": {
                     "columns": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Column field paths or preset names"
+                        "description": "Field paths, preset names, or \"#data\" (message body size)"
                     }
                 },
                 "required": ["columns"]
@@ -247,12 +252,18 @@ pub fn build_tools() -> Vec<Value> {
         ),
         func(
             "edit_messages",
-            "Change fields of many messages in one batch; an entry without `value` \
-             drops that pending edit instead. Find the messages by a criterion \
-             first (`search_messages`, `count_messages`), then send the whole \
-             batch in one call. The batch is checked, shown to the human as one \
-             summary and confirmed once; the file is not written until the human \
-             commits it.",
+            "Change messages in one batch: fields (`op` field, default), delete \
+             (`remove` shifts later seqs down by one, `clear` leaves a gap; \
+             `till` makes a range [seq, till)), change type (`retype`), insert a \
+             new message before seq (`insert`, a copy of `copy_of` or of seq, \
+             then `fields` on top), or undo (`restore`). An entry without \
+             `value` drops that pending field edit. All seqs are file seqs: \
+             renumbering happens only on commit. Removing K and inserting K \
+             keeps the last seq. Find the messages first (`search_messages`, \
+             `count_messages`), then send the whole batch in one call. The batch \
+             is checked, shown to the human as one summary (first line: whether \
+             the last seq changes) and confirmed once; the file is not written \
+             until the human commits it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -262,11 +273,24 @@ pub fn build_tools() -> Vec<Value> {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "seq": { "type": "integer", "description": "Message seq" },
-                                "path": { "type": "string", "description": "Field path, e.g. header.status" },
-                                "value": { "type": "string", "description": "New value as text; omit to drop the pending edit" }
+                                "op": {
+                                    "type": "string",
+                                    "enum": ["field", "remove", "clear", "retype", "insert", "restore"],
+                                    "description": "What to do; default field"
+                                },
+                                "seq": { "type": "integer", "description": "Message seq (insert: before this seq)" },
+                                "till": { "type": "integer", "description": "remove/clear/retype: end of range, exclusive; a retyped range gets one body: `type` plus `fields`, the rest default" },
+                                "path": { "type": "string", "description": "field: path, e.g. header.status" },
+                                "value": { "type": "string", "description": "field: new value as text; omit to drop the pending edit" },
+                                "type": { "type": "string", "description": "retype/insert: message type name" },
+                                "copy_of": { "type": "integer", "description": "insert: seq whose body is copied; default seq" },
+                                "fields": {
+                                    "type": "object",
+                                    "additionalProperties": { "type": "string" },
+                                    "description": "retype/insert: field path -> value on top of the body"
+                                }
                             },
-                            "required": ["seq", "path"]
+                            "required": ["seq"]
                         }
                     }
                 },
@@ -347,12 +371,16 @@ fn scheme_of(ctx: &ToolCtx) -> &Scheme {
 
 fn overview(ctx: &ToolCtx) -> Result<String, String> {
     let info = &ctx.file.info;
-    let bytes = std::fs::metadata(&ctx.file.path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let bytes: u64 = ctx
+        .file
+        .parts
+        .iter()
+        .map(|p| std::fs::metadata(&p.path).map(|m| m.len()).unwrap_or(0))
+        .sum();
     let mut out = format!(
-        "file: {}\nsize: {bytes} bytes\nfirst seq: {}\nlast seq: {}\n",
-        ctx.file.path.display(),
+        "file: {}\nparts: {}\nsize: {bytes} bytes\nfirst seq: {}\nlast seq: {}\n",
+        ctx.file.name,
+        ctx.file.parts.len(),
         info.seq_begin.map_or("-".into(), |s| s.to_string()),
         info.seq_last.map_or("-".into(), |s| s.to_string()),
     );
@@ -551,18 +579,23 @@ fn find(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
             truncated = true;
             break;
         }
-        let msgs = fetch::from_seq(&ctx.ctx, &ctx.src(), at, count - found)?;
+        let msgs = fetch::from_seq(&ctx.ctx, &ctx.src(), at, SCAN_CHUNK)?;
         if msgs.is_empty() {
             break;
         }
         for m in &msgs {
+            // Позиция идёт по каждому прочитанному, а не по совпавшему: кусок
+            // без совпадений иначе читался бы заново без конца.
+            at = m.seq + 1;
             if tf.transform(m)?.is_none() {
                 continue;
             }
             let name = s.message(m.msgid).map_or("?", |st| st.name.as_str());
             out.push_str(&format!("seq {} {}\n", m.seq, name));
             found += 1;
-            at = m.seq + 1;
+            if found == count {
+                break;
+            }
         }
     }
     if truncated {
@@ -604,12 +637,10 @@ fn count(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
         };
     }
     ctx.ctx.ensure_lua(ctx.file.info.backend);
-    let last = ctx.file.info.seq_last.unwrap_or(0);
-    let begin = ctx.file.info.seq_begin.unwrap_or(0);
     // Скан по флагу воркера: прерванный ход останавливает и его
     // (`agr:agent-loop`).
     let matches = crate::data::Matches::default();
-    crate::data::filter(&ctx.file, &filter, begin, last, &ctx.stop, &matches, || {});
+    crate::data::filter(&ctx.file, &filter, &ctx.stop, &matches, || {});
     if let Some(e) = matches.error.lock().unwrap().clone() {
         return Err(e);
     }
@@ -660,7 +691,7 @@ fn apply_filter(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
 }
 
 fn view_state(ctx: &mut ToolCtx) -> Result<String, String> {
-    let file = ctx.file.path.display().to_string();
+    let file = ctx.file.name.clone();
     let gen = ctx.gen.load(std::sync::atomic::Ordering::SeqCst);
     let total = ctx.total.map(|n| n.to_string()).unwrap_or("?".into());
     let filter = ctx.filter.summary();
@@ -680,9 +711,10 @@ fn view_state(ctx: &mut ToolCtx) -> Result<String, String> {
         "none".into()
     } else {
         format!(
-            "{} messages, {} fields",
+            "{} messages, {} fields, {} total incl. deletes/inserts/retypes",
             ctx.edits.messages(),
-            ctx.edits.fields()
+            ctx.edits.fields(),
+            ctx.edits.count()
         )
     };
     if !ctx.edits.is_empty() {
@@ -769,6 +801,19 @@ fn go_to(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
 #[derive(Debug, Default)]
 pub struct Batch {
     pub edits: crate::edit::Edits,
+    /// Прогноз последнего seq после записи (`agr:seq-forecast`).
+    pub forecast: Option<crate::edit::Forecast>,
+}
+
+impl Batch {
+    /// Сводка для подтверждения: первой строкой — прогноз последнего seq.
+    pub fn summary(&self) -> crate::edit::Summary {
+        let mut s = self.edits.summary();
+        if let Some(f) = &self.forecast {
+            s.lines.insert(0, f.line());
+        }
+        s
+    }
 }
 
 /// Что проверить после прогона tll-patch: поле, его старое и новое значение.
@@ -799,11 +844,20 @@ pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
     }
     let mut edits = ctx.edits.clone();
     let mut wants: Vec<Want> = Vec::new();
+    let mut retyped: Vec<(i64, String)> = Vec::new();
     for e in list {
         let seq = e
             .get("seq")
             .and_then(|v| v.as_i64())
             .ok_or("в записи нужен seq")?;
+        let op = e.get("op").and_then(|v| v.as_str()).unwrap_or("field");
+        if op != "field" {
+            stream_op(ctx, &mut edits, &mut retyped, op, seq, e)?;
+            continue;
+        }
+        if edits.deleted(seq) {
+            return Err(format!("seq {seq} удалён в пачке — поле не правится"));
+        }
         let path = e
             .get("path")
             .and_then(|v| v.as_str())
@@ -836,11 +890,275 @@ pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
             }
         }
     }
-    if let Err(e) = verify(ctx, &edits, &wants) {
+    if let Err(e) = verify(ctx, &edits, &wants).and_then(|()| verify_stream(ctx, &edits, &retyped))
+    {
         restore(ctx);
         return Err(e);
     }
-    Ok(Batch { edits })
+    let forecast = forecast(ctx, &edits)?;
+    Ok(Batch { edits, forecast })
+}
+
+/// Сырые seq и msgid файла в `[from, to]` и следующий за ними.
+fn file_seqs(ctx: &ToolCtx, from: i64, to: i64) -> Result<fetch::FileSeqs, String> {
+    fetch::seqs_in(&ctx.ctx, &ctx.file.raw_sources(), from, to)
+}
+
+/// Тело сообщения `seq` в виде (с правками) и его тип.
+fn body_at(ctx: &ToolCtx, seq: i64) -> Result<(String, Msg), String> {
+    let m = fetch::from_seq(&ctx.ctx, &ctx.src(), seq, 1)?
+        .into_iter()
+        .find(|m| m.seq == seq)
+        .ok_or_else(|| format!("нет сообщения seq {seq}"))?;
+    let name = ctx
+        .file
+        .scheme
+        .message(m.msgid)
+        .map(|s| s.name.clone())
+        .ok_or_else(|| format!("тип msgid {} неизвестен", m.msgid))?;
+    Ok((name, m))
+}
+
+/// Записи состава потока (`agr:stream-ops`): удаление, смена типа, вставка,
+/// снятие. Негодная запись валит пачку — модель чинит её сама.
+fn stream_op(
+    ctx: &mut ToolCtx,
+    edits: &mut crate::edit::Edits,
+    retyped: &mut Vec<(i64, String)>,
+    op: &str,
+    seq: i64,
+    e: &Value,
+) -> Result<(), String> {
+    use crate::edit::{stream, Insert};
+    let scheme = ctx.file.scheme.clone();
+    let fields: Vec<(String, String)> = e
+        .get("fields")
+        .and_then(|v| v.as_object())
+        .map(|o| {
+            o.iter()
+                .map(|(k, v)| {
+                    let v = v
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string());
+                    (k.clone(), v)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    match op {
+        "remove" | "clear" => {
+            let to = match e.get("till").and_then(|v| v.as_i64()) {
+                Some(t) if t <= seq => return Err(format!("пустой диапазон [{seq}, {t})")),
+                Some(t) => t - 1,
+                None => seq,
+            };
+            let (seqs, after) = file_seqs(ctx, seq, to)?;
+            if seqs.is_empty() {
+                return Err(format!("нет сообщений в [{seq}, {}]", to));
+            }
+            for (i, (s, msgid)) in seqs.iter().enumerate() {
+                let next = seqs.get(i + 1).map(|(n, _)| *n).or(after);
+                let name = scheme
+                    .message(*msgid)
+                    .map(|st| st.name.clone())
+                    .unwrap_or_default();
+                edits.delete(*s, &name, op == "remove", next);
+            }
+        }
+        "retype" if e.get("till").is_some() => {
+            // Диапазон — одним телом: тип и `fields`, остальное по умолчанию.
+            let to = e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .ok_or("retype: нужен type")?;
+            if !scheme.messages().any(|m| m.name == to) {
+                return Err(format!("типа {to} нет в схеме"));
+            }
+            let till = e.get("till").and_then(|v| v.as_i64()).unwrap_or(seq);
+            if till <= seq {
+                return Err(format!("пустой диапазон [{seq}, {till})"));
+            }
+            let (seqs, after) = file_seqs(ctx, seq, till - 1)?;
+            let msgs: Vec<(i64, String, Option<i64>)> = seqs
+                .iter()
+                .enumerate()
+                .map(|(i, (s, msgid))| {
+                    let next = seqs.get(i + 1).map(|(n, _)| *n).or(after);
+                    let name = scheme
+                        .message(*msgid)
+                        .map(|st| st.name.clone())
+                        .unwrap_or_default();
+                    (*s, name, next)
+                })
+                .collect();
+            let body: stream::Body = fields.into_iter().collect();
+            if edits.retype_many(&msgs, to, &body) == 0 {
+                return Err(format!("[{seq}, {till}): менять нечего — все уже {to} или удалены"));
+            }
+            if let Some(first) = msgs
+                .iter()
+                .find(|m| matches!(edits.op(m.0), Some(crate::edit::Op::Retype { .. })))
+            {
+                retyped.push((first.0, to.to_string()));
+            }
+        }
+        "retype" => {
+            let to = e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .ok_or("retype: нужен type")?;
+            let to_st = scheme
+                .messages()
+                .find(|m| m.name == to)
+                .ok_or_else(|| format!("типа {to} нет в схеме"))?;
+            let (from, m) = body_at(ctx, seq)?;
+            let from_st = scheme.message(m.msgid).ok_or("тип неизвестен")?;
+            let mut body: stream::Body =
+                stream::body_of(&decode::decode(&scheme, from_st, &m.data), &m.data)
+                    .into_iter()
+                    .filter(|(path, _)| {
+                        !path.contains('[')
+                            && match (
+                                scheme.field_path(from_st, path),
+                                scheme.field_path(to_st, path),
+                            ) {
+                                (Some((_, a)), Some((_, b))) => {
+                                    format!("{:?}", a.kind) == format!("{:?}", b.kind)
+                                }
+                                _ => false,
+                            }
+                    })
+                    .collect();
+            body.extend(fields);
+            edits.retype(seq, &from, to, body)?;
+            retyped.push((seq, to.to_string()));
+        }
+        "insert" => {
+            let last = ctx.file.info.seq_last.unwrap_or(-1);
+            if seq > last {
+                return Err(format!(
+                    "вставка за последним seq {last} не поддерживается — вставьте перед ним"
+                ));
+            }
+            let src = e.get("copy_of").and_then(|v| v.as_i64()).unwrap_or(seq);
+            let occupied = file_seqs(ctx, seq, seq)?.0.iter().any(|(s, _)| *s == seq);
+            let (name, mut body) = match body_at(ctx, src) {
+                Ok((name, m)) => {
+                    let st = scheme.message(m.msgid).ok_or("тип неизвестен")?;
+                    (
+                        name,
+                        stream::body_of(&decode::decode(&scheme, st, &m.data), &m.data),
+                    )
+                }
+                Err(_) if e.get("type").is_some() => (String::new(), stream::Body::new()),
+                Err(x) => return Err(format!("insert: копировать нечего — {x}")),
+            };
+            let name = match e.get("type").and_then(|v| v.as_str()) {
+                Some(t) if t != name => {
+                    // Другой тип — тело только из fields.
+                    body.clear();
+                    t.to_string()
+                }
+                _ => name,
+            };
+            body.extend(fields);
+            let mut ins = Insert {
+                name,
+                body,
+                occupied,
+                data: Vec::new(),
+            };
+            ins.data = check_insert(ctx, seq, &ins)?;
+            edits.insert(seq, ins)?;
+        }
+        "restore" => {
+            let mut any = edits.restore(seq);
+            while edits.drop_insert(seq, 0) {
+                any = true;
+            }
+            if !any {
+                return Err(format!("seq {seq}: снимать нечего"));
+            }
+        }
+        _ => return Err(format!("неизвестная op {op}")),
+    }
+    Ok(())
+}
+
+/// Собрать вставку tll-patch: тело или отказ.
+fn check_insert(ctx: &mut ToolCtx, seq: i64, ins: &crate::edit::Insert) -> Result<Vec<u8>, String> {
+    let p = ctx
+        .store
+        .write_text(&crate::edit::Edits::insert_yaml(seq, ins))?
+        .ok_or("пустая вставка")?;
+    let srcs = ctx.file.raw_sources();
+    let Some(j) = fetch::Src::part_of(&srcs, seq) else {
+        return Err(format!("вставка перед {seq}: seq за концом файла"));
+    };
+    let open = srcs[j].open.clone().patch(Some(p)).at(seq);
+    let mut r = Reader::open(&ctx.ctx, &open).map_err(|e| format!("вставка перед {seq}: {e}"))?;
+    let m = r.next();
+    if let Some(e) = r.error().or_else(crate::tll::log::take) {
+        return Err(format!("вставка перед {seq}: {e}"));
+    }
+    match m {
+        Some(m) if m.seq == seq => Ok(m.data),
+        _ => Err(format!("вставка перед {seq} не собралась")),
+    }
+}
+
+/// Смена типа принята tll-patch, полный yaml фиксации грузится целиком.
+fn verify_stream(
+    ctx: &mut ToolCtx,
+    edits: &crate::edit::Edits,
+    retyped: &[(i64, String)],
+) -> Result<(), String> {
+    for (seq, to) in retyped {
+        let m = check(ctx, *seq).map_err(|e| format!("смена типа seq {seq}: {e}"))?;
+        let got = ctx.file.scheme.message(m.msgid).map(|s| s.name.as_str());
+        if got != Some(to.as_str()) {
+            return Err(format!("смена типа seq {seq} не принята tll-patch"));
+        }
+    }
+    let Some(full) = ctx.store.write_full(edits)? else {
+        return Ok(());
+    };
+    // Полный yaml грузится против каждой части склейки: команды с seq не этой
+    // части в её канале не срабатывают, но разбор и команды диапазонов — те же.
+    for s in ctx.file.raw_sources() {
+        let open = s.open.clone().patch(Some(full.clone())).meta();
+        let r = Reader::open(&ctx.ctx, &open)
+            .map_err(|e| format!("пачка не грузится в tll-patch: {e}"))?;
+        for _ in r {}
+        if let Some(e) = crate::tll::log::take() {
+            return Err(format!("пачка не грузится в tll-patch: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// Прогноз последнего seq по пачке: без прохода, удалён хвост — чтением назад.
+fn forecast(
+    ctx: &ToolCtx,
+    edits: &crate::edit::Edits,
+) -> Result<Option<crate::edit::Forecast>, String> {
+    let Some(before) = ctx.file.info.seq_last else {
+        return Ok(None);
+    };
+    let map = edits.seq_map();
+    let alive = fetch::alive_before(
+        &ctx.ctx,
+        &ctx.file.raw_sources(),
+        ctx.file.begin(),
+        before,
+        |s| map.deleted(s),
+    )?;
+    Ok(Some(crate::edit::Forecast {
+        before,
+        after: map.last(before, alive),
+        transform: ctx.lua_enabled && !ctx.lua_code.is_empty(),
+    }))
 }
 
 /// Прогнать кандидата через tll-patch: каждое правленое сообщение читается с
@@ -874,9 +1192,10 @@ pub fn apply_batch(ctx: &mut ToolCtx, batch: Batch) -> String {
     ctx.edits = batch.edits;
     ctx.sync();
     format!(
-        "правки применены: {} сообщений, {} полей",
+        "правки применены: {} сообщений, {} полей, всего правок {}",
         ctx.edits.messages(),
-        ctx.edits.fields()
+        ctx.edits.fields(),
+        ctx.edits.count()
     )
 }
 
@@ -896,7 +1215,11 @@ pub fn restore(ctx: &mut ToolCtx) {
 /// правку принял. Повторяет проверку `data::check`: старый tll-patch на
 /// неверном значении только пишет в журнал, поэтому журнал — тоже отказ.
 fn check(ctx: &ToolCtx, seq: i64) -> Result<Msg, String> {
-    let mut r = Reader::open(&ctx.ctx, &ctx.src().clone().at(seq))?;
+    let srcs = ctx.src();
+    let Some(j) = fetch::Src::part_of(&srcs, seq) else {
+        return Err(format!("seq {seq} за концом файла"));
+    };
+    let mut r = Reader::open(&ctx.ctx, &srcs[j].open.clone().at(seq))?;
     let m = r.next();
     if let Some(e) = r.error() {
         return Err(e);
@@ -1153,6 +1476,92 @@ mod tests {
             .contains("аргументы"));
     }
 
+    /// `agr:agent-batch` `agr:stream-ops` `agr:seq-forecast` — одна пачка
+    /// смешивает поле, удаление диапазона, вставку и смену типа; сводка
+    /// первой строкой говорит про последний seq.
+    #[test]
+    fn batch_mixes_field_remove_insert_and_retype() {
+        let mut c = ctx();
+        let b = prepare(
+            &mut c,
+            r#"{"edits":[
+                {"seq":0,"path":"header.order_id","value":"777"},
+                {"op":"remove","seq":10,"till":13},
+                {"op":"insert","seq":20,"copy_of":2},
+                {"op":"insert","seq":20,"copy_of":3},
+                {"op":"insert","seq":20,"copy_of":7},
+                {"op":"retype","seq":6,"type":"Cancel"}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(b.edits.deleted_seqs(), vec![10, 11, 12]);
+        assert_eq!(b.edits.inserts(20).len(), 3);
+        assert!(b.edits.inserts(20).iter().all(|i| !i.data.is_empty()));
+        assert!(b
+            .edits
+            .yaml()
+            .contains("- cmd: Remove\n  from: 10\n  till: 13\n"));
+        assert!(b.edits.yaml().contains("cmd: Update"));
+        let s = b.summary();
+        assert_eq!(s.lines[0], "последний seq 399 — не меняется", "{s:?}");
+    }
+
+    /// `agr:agent-batch` `agr:stream-ops` — смена типа диапазона: одна
+    /// команда `Update` одним телом, уже нужного типа не трогаются.
+    #[test]
+    fn batch_retypes_a_range_with_one_body() {
+        let mut c = ctx();
+        let b = prepare(&mut c, r#"{"edits":[{"op":"retype","seq":10,"till":20,"type":"Ping"}]}"#)
+            .unwrap();
+        // 14 и 19 — уже Ping (каждое пятое): диапазон рвётся на них.
+        let y = b.edits.yaml();
+        assert!(y.contains("- cmd: Update\n  from: 10\n  till: 14\n  name: 'Ping'\n  fields: {}\n"), "{y}");
+        assert!(y.contains("- cmd: Update\n  from: 15\n  till: 19\n"), "{y}");
+        assert_eq!(y.matches("cmd: Update").count(), 2, "{y}");
+    }
+
+    /// `agr:agent-batch` — противоречивые записи валят пачку: поле удалённого,
+    /// вставка за последним seq, неизвестная операция.
+    #[test]
+    fn conflicting_ops_on_one_seq_fail_the_batch() {
+        let mut c = ctx();
+        let e = prepare(
+            &mut c,
+            r#"{"edits":[{"op":"remove","seq":5},{"seq":5,"path":"header.order_id","value":"1"}]}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("удалён"), "{e}");
+        let e = prepare(
+            &mut c,
+            r#"{"edits":[{"op":"insert","seq":100000,"copy_of":2}]}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("за последним"), "{e}");
+        let e = prepare(&mut c, r#"{"edits":[{"op":"swap","seq":5}]}"#).unwrap_err();
+        assert!(e.contains("неизвестная op"), "{e}");
+        assert!(c.edits.is_empty());
+    }
+
+    /// `agr:agent-no-write` — состав потока от агента ложится в вид одним
+    /// `Act::Sync`, файл не меняется.
+    #[test]
+    fn stream_ops_from_agent_do_not_write_the_file() {
+        let mut c = ctx();
+        let before = std::fs::read(&c.file.parts[0].path).unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        c.acts = Some(tx);
+        let b = prepare(&mut c, r#"{"edits":[{"op":"clear","seq":30,"till":40}]}"#).unwrap();
+        apply_batch(&mut c, b);
+        assert!(matches!(rx.try_recv(), Ok(Act::Sync { .. })));
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            std::fs::read(&c.file.parts[0].path).unwrap(),
+            before,
+            "файл не тронут"
+        );
+        assert_eq!(c.edits.deleted_seqs().len(), 10);
+    }
+
     /// Типы сообщений считаются по индексу, если он есть; иначе перечисляют схемные.
     #[test]
     fn message_types_counts_by_index() {
@@ -1187,6 +1596,18 @@ mod tests {
         let mut c = ctx();
         let text = execute(&mut c, "search_messages", r#"{"expr":"seq > 0","count":2}"#).unwrap();
         assert!(text.contains("seq "), "{text}");
+    }
+
+    /// Поиск идёт дальше куска без совпадений: единственное совпадение в
+    /// последнем сообщении находится, скан не крутится на месте.
+    #[test]
+    fn search_messages_skips_chunks_without_matches() {
+        let mut c = ctx();
+        let last = c.file.info.seq_last.unwrap();
+        assert!(last > c.file.info.seq_begin.unwrap(), "нужно больше одного сообщения");
+        let args = format!(r#"{{"expr":"seq == {last}","count":1}}"#);
+        let text = execute(&mut c, "search_messages", &args).unwrap();
+        assert!(text.starts_with(&format!("seq {last} ")), "{text}");
     }
 
     /// Подсчёт сообщений работает и без индекса, если задано выражение.

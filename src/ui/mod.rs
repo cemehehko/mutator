@@ -133,7 +133,7 @@ pub fn run(
     setup: impl FnOnce(&mut Desk) + 'static,
 ) -> Result<(), String> {
     let title = match &file {
-        Some(f) => format!("mutator — {}", f.path.display()),
+        Some(f) => format!("mutator — {}", f.name),
         None => "mutator".to_string(),
     };
     let mut viewport = egui::ViewportBuilder::default()
@@ -155,7 +155,7 @@ pub fn run(
             style(&cc.egui_ctx);
             let mut recent = crate::recent::Recent::load();
             let app = file.map(|f| {
-                recent.push(&f.path);
+                recent.push(std::path::Path::new(&f.name));
                 let _ = recent.save();
                 App::from_file(&cc.egui_ctx, f, session, setup)
             });
@@ -260,7 +260,7 @@ impl App {
     fn finish(&self, ctx: &egui::Context) {
         let _ = self.cmd.send(agent_::Cmd::Shutdown);
         if self.shot.is_none() {
-            let _ = session::save(&self.desk.file.path, &self.snapshot(ctx));
+            let _ = session::save(std::path::Path::new(&self.desk.file.name), &self.snapshot(ctx));
         }
     }
 
@@ -312,6 +312,7 @@ impl App {
                             egui::Key::Tab => Key::Tab,
                             egui::Key::Backspace => Key::Backspace,
                             egui::Key::Delete => Key::Delete,
+                            egui::Key::Insert => Key::Insert,
                             _ => continue,
                         };
                         out.push(k);
@@ -520,7 +521,8 @@ impl App {
             return;
         };
         if self.shot.is_none() {
-            let _ = session::save(&self.desk.file.path, &self.snapshot(ctx));
+            let _ =
+                session::save(std::path::Path::new(&self.desk.file.name), &self.snapshot(ctx));
         }
         match self.desk.reopen(&p) {
             Ok(()) => {
@@ -540,7 +542,7 @@ impl App {
         }
         let s = self.snapshot(ctx);
         if s != self.saved {
-            if let Err(e) = session::save(&self.desk.file.path, &s) {
+            if let Err(e) = session::save(std::path::Path::new(&self.desk.file.name), &s) {
                 self.desk.status = format!("сессия: {e}");
             }
             self.saved = s;

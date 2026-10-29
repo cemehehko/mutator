@@ -4,6 +4,8 @@
 //! отдаёт число сообщений, seq каждого [`STEP`]-го от своего начала и счётчики
 //! типов; склейка даёт отсортированные контрольные точки (строка, seq) с шагом не
 //! больше [`STEP`]. Память — O(сообщений / STEP): гигабайтный файл — десятки КБ.
+//! Склейка (`agr:glue-parts`) — части по порядку, куски режутся по байтам каждой
+//! части, а строки и точки нумеруются сквозные.
 //!
 //! Наружу: [`Index`], [`build`], [`STEP`].
 
@@ -69,24 +71,34 @@ fn part(ctx: &Context, path: &Path, (a, b): Chunk, stop: &Arc<AtomicBool>) -> Re
     Ok(p)
 }
 
-/// Построить индекс файла с seq `[begin, last]`. `progress` — доля готового.
+/// Построить индекс частей `(путь, begin, last)` по возрастанию seq.
+/// `progress` — доля готового.
 pub fn build(
-    path: &Path,
-    begin: i64,
-    last: i64,
+    parts: &[(&Path, i64, i64)],
     stop: &Arc<AtomicBool>,
     mut progress: impl FnMut(f32),
 ) -> Result<Index, String> {
-    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let list = chunks::even(begin, last, chunks::count(bytes, 8));
+    // Кусок и его часть: куски на часть — по её байтам, порядок сквозной.
+    let mut list: Vec<(Chunk, usize)> = Vec::new();
+    let mut bytes_all = 0u64;
+    for (i, &(path, begin, last)) in parts.iter().enumerate() {
+        let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        bytes_all += bytes;
+        list.extend(
+            chunks::even(begin, last, chunks::count(bytes, 8))
+                .into_iter()
+                .map(|c| (c, i)),
+        );
+    }
+    let ranges: Vec<Chunk> = list.iter().map(|&(c, _)| c).collect();
     let mut idx = Index::default();
     let mut err = None;
-    let n = list.len().max(1);
+    let n = ranges.len().max(1);
     chunks::run(
-        &list,
-        bytes,
+        &ranges,
+        bytes_all,
         stop,
-        |ctx, c, halt| part(ctx, path, c, halt),
+        |ctx, i, c, halt| part(ctx, parts[list[i].1].0, c, halt),
         |i, p| match p {
             Ok(p) => {
                 let base = idx.total;

@@ -28,6 +28,7 @@ pub(super) fn map(k: &KeyEvent) -> Option<Key> {
         KeyCode::BackTab => Key::BackTab,
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Delete => Key::Delete,
+        KeyCode::Insert => Key::Insert,
         KeyCode::Up => Key::Up,
         KeyCode::Down => Key::Down,
         KeyCode::Left => Key::Left,

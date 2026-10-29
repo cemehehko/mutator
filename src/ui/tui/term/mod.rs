@@ -124,11 +124,12 @@ pub fn run(
 /// Сессия терминала — то же, что у окна, кроме вида и геометрии окна: их
 /// оставляем от записанной окном.
 fn save(d: &Desk) {
+    let key = std::path::Path::new(&d.file.name);
     let mut s = d.session();
-    if let Some(old) = session::load(&d.file.path) {
+    if let Some(old) = session::load(key) {
         (s.look, s.window) = (old.look, old.window);
     }
-    let _ = session::save(&d.file.path, &s);
+    let _ = session::save(key, &s);
 }
 
 fn drive(

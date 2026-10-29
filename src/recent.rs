@@ -73,9 +73,13 @@ impl Recent {
         self.files.clear();
     }
 
-    /// Файлы, которые ещё есть на диске, свежий первым.
+    /// Файлы, которые ещё есть на диске, свежий первым. Спека склейки жива,
+    /// пока разворачивается: `a.dat+b.dat`, `r.current.dat-3`.
     pub fn existing(&self) -> Vec<&PathBuf> {
-        self.files.iter().filter(|p| p.is_file()).collect()
+        self.files
+            .iter()
+            .filter(|p| p.is_file() || crate::spec::expand(&p.to_string_lossy()).is_ok())
+            .collect()
     }
 
     /// Последний открытый файл, если он ещё есть на диске.

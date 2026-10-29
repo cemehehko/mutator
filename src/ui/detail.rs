@@ -20,7 +20,7 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk) {
         ui.label("нет выбранной строки");
         return;
     };
-    let Some(row) = d.rows.iter().find(|r| r.seq == det.seq) else {
+    let Some(row) = d.rows.iter().find(|r| r.seq == det.seq && r.ins == det.ins) else {
         return;
     };
     let font = egui::FontId::monospace(13.0);
@@ -32,6 +32,7 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk) {
     let edited: std::collections::HashMap<String, String> = d
         .edits
         .message(d.orig_seq(det.seq))
+        .filter(|_| det.ins.is_none())
         .map(|m| {
             m.fields
                 .iter()
@@ -47,7 +48,13 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk) {
     let mut edit = false;
     ui.horizontal(|ui| {
         ui.colored_label(NAME, egui::RichText::new(&row.name).strong());
-        ui.label(egui::RichText::new(format!("seq {}", row.seq)).color(DIM));
+        // Состав потока: вставка, удалено, seq после записи (`agr:view-input-seq`).
+        let seq = match (&row.tag, row.ins) {
+            (Some(t), Some(_)) => format!("вставка перед {} → seq {}", row.seq, &t[1..]),
+            (Some(t), None) => format!("seq {t}"),
+            (None, _) => format!("seq {}", row.seq),
+        };
+        ui.label(egui::RichText::new(seq).color(DIM));
         // Мутатор поменял seq: рядом, красным, тот, что в файле.
         if let Some(orig) = seq_in_file {
             ui.label(egui::RichText::new(format!("(в файле {orig})")).color(EDITED));

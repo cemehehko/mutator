@@ -100,9 +100,14 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk, wheel: &mut f32) {
         let mut x = body.left() + 4.0;
         for c in &layout {
             let fg = match c.kind {
-                ColKind::Seq if d.edited_row(r.seq) || d.mutated_row(r.seq) => EDITED,
+                _ if d.deleted_row(r) => DIM,
+                ColKind::Seq if r.ins.is_some() || d.edited_row(r.seq) || d.mutated_row(r.seq) => {
+                    EDITED
+                }
                 ColKind::Seq => DIM,
                 ColKind::Name => NAME,
+                ColKind::DataLen if d.edited_row(r.seq) || d.mutated_row(r.seq) => EDITED,
+                ColKind::DataLen => TEXT,
                 ColKind::Field(i)
                     if d.edited(r.seq, &d.columns[i])
                         || d.mutated(r.seq, &d.columns[i]).is_some() =>

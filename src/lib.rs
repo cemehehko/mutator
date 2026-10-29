@@ -4,6 +4,7 @@
 //! реестр бэкендов, `tll` — встроенный бэкенд libtll (фича `tll`), [`scheme`] — модель схемы, [`decode`] — разбор тела,
 //! [`lua`] — фильтр как у tll-read, [`range`] — границы `-s`, [`dump`] — печать YAML,
 //! [`data`] — окно строк, индекс, фильтр и поиск в фоне, [`session`] — сессии по имени файла, [`recent`] — последние файлы,
+//! [`spec`] — спека открытия: склейка `+` и ротация `-N`,
 //! [`edit`] — правки полей через tll-patch и их фиксация,
 //! [`lua_highlight`] — подсветка синтаксиса Lua для редактора transform-кода,
 //! [`markup`] — разметка ответа модели, общая для окна и TUI,
@@ -25,6 +26,7 @@ pub mod range;
 pub mod recent;
 pub mod scheme;
 pub mod session;
+pub mod spec;
 #[cfg(feature = "tll")]
 pub mod tll;
 pub mod ui;

@@ -78,7 +78,7 @@ impl Shell {
     /// Открыть файл вместо текущего (или вместо заглушки). `true` — открыли.
     pub fn open_path(&mut self, ctx: &egui::Context, path: &Path) -> bool {
         if let Some(app) = &self.app {
-            if app.desk.file.path == path {
+            if app.desk.file.name == path.to_string_lossy() {
                 return false;
             }
             if app.desk.commit.as_ref().is_some_and(|c| c.running.is_some()) {

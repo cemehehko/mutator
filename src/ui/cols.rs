@@ -10,6 +10,8 @@ use crate::desk::{Desk, RowView};
 pub enum ColKind {
     Seq,
     Name,
+    /// Размер тела в байтах — псевдоколонка `#data` (`agr:size-column`).
+    DataLen,
     /// Номер в [`Desk::columns`].
     Field(usize),
 }
@@ -31,8 +33,9 @@ const MAX_NAME: usize = 24;
 /// Текст ячейки.
 pub fn cell(row: &RowView, kind: ColKind) -> String {
     match kind {
-        ColKind::Seq => row.seq.to_string(),
+        ColKind::Seq => row.tag.clone().unwrap_or_else(|| row.seq.to_string()),
         ColKind::Name => row.name.clone(),
+        ColKind::DataLen => row.data.len().to_string(),
         ColKind::Field(i) => row.cells.get(i).cloned().flatten().unwrap_or_default(),
     }
 }
@@ -83,17 +86,28 @@ pub fn layout(desk: &Desk, avail: usize) -> (Vec<Col>, bool) {
     let mut used: usize = cols.iter().map(|c| c.width + 1).sum();
     let mut more = false;
     for (i, path) in desk.columns.iter().enumerate().skip(desk.hscroll) {
-        let title = path.rsplit('.').next().unwrap_or(path).to_string();
-        let w = width(ColKind::Field(i), &title, MAX_FIELD);
-        let numeric = rows.iter().all(|r| {
-            let t = cell(r, ColKind::Field(i));
-            t.is_empty() || t.parse::<f64>().is_ok()
-        });
+        let data_len = path == crate::columns::DATA_LEN;
+        let title = if data_len {
+            crate::columns::DATA_LEN.to_string()
+        } else {
+            path.rsplit('.').next().unwrap_or(path).to_string()
+        };
+        let kind = if data_len {
+            ColKind::DataLen
+        } else {
+            ColKind::Field(i)
+        };
+        let w = width(kind, &title, MAX_FIELD);
+        let numeric = data_len
+            || rows.iter().all(|r| {
+                let t = cell(r, kind);
+                t.is_empty() || t.parse::<f64>().is_ok()
+            });
         if used + w + 1 > avail {
             // Хоть часть первой колонки поля — лучше, чем ничего.
             if used + 6 < avail && cols.len() == 2 {
                 cols.push(Col {
-                    kind: ColKind::Field(i),
+                    kind,
                     title,
                     width: avail - used - 1,
                     right: numeric,
@@ -104,7 +118,7 @@ pub fn layout(desk: &Desk, avail: usize) -> (Vec<Col>, bool) {
         }
         used += w + 1;
         cols.push(Col {
-            kind: ColKind::Field(i),
+            kind,
             title,
             width: w,
             right: numeric,

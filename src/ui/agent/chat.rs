@@ -10,7 +10,7 @@ use egui::text::LayoutJob;
 
 use super::State;
 use crate::markup::{self, Block, Span};
-use crate::ui::theme::{ACCENT, DIM, ERROR, NAME, TEXT};
+use crate::ui::theme::{ACCENT, DIM, NAME, TEXT};
 
 /// Одна строка ленты: куски текста с цветом.
 pub(super) type Line = Vec<(String, egui::Color32)>;
@@ -89,21 +89,10 @@ fn words(text: &str) -> Vec<String> {
 /// Лента как строки: сообщения, стриминг и журнал хода.
 pub(super) fn tape(state: &State) -> Vec<Line> {
     let mut out = Vec::new();
-    for m in &state.messages {
-        let role = m.role.as_str();
-        if role == "tool" {
-            // Результат инструмента — килобайты YAML: в ленте одна строка
-            // сводки (`agr:agent-loop`).
-            let lines = m.text.lines().count().max(1);
-            let what = if m.is_error {
-                format!("{} — ошибка", m.name)
-            } else {
-                format!("{} → {} строк", m.name, lines)
-            };
-            out.push(vec![("Инструмент ".to_string(), DIM), (what, ERROR)]);
-            continue;
-        }
-        let (who, color) = match role {
+    // В ленте — вопросы и ответы; инструменты — итогом в строке состояния
+    // (`agr:agent-loop`).
+    for m in state.messages.iter().filter(|m| super::in_tape(m)) {
+        let (who, color) = match m.role.as_str() {
             "user" => ("Вы", NAME),
             "assistant" => ("Модель", ACCENT),
             _ => ("Инструмент", DIM),
@@ -114,6 +103,12 @@ pub(super) fn tape(state: &State) -> Vec<Line> {
     if !state.streaming.is_empty() {
         out.push(vec![("Модель: ".to_string(), ACCENT)]);
         blocks(&mut out, &state.streaming);
+        // Мигающий курсор: текст ещё идёт (`agr:agent-progress`).
+        if state.caret(std::time::Instant::now()) {
+            if let Some(last) = out.last_mut() {
+                last.push(("▍".to_string(), ACCENT));
+            }
+        }
     }
     if state.show_trace {
         for t in &state.trace {
@@ -133,14 +128,18 @@ fn blocks(out: &mut Vec<Line>, text: &str) {
                     2 => "## ".to_string(),
                     _ => "### ".to_string(),
                 };
-                out.push(vec![(mark, DIM), (text, TEXT)]);
+                let mut line = vec![(mark, DIM)];
+                line.extend(spans_line(&text));
+                out.push(line);
             }
             Block::Paragraph(text) => {
                 out.push(spans_line(&text));
             }
             Block::Bullet { depth, text } => {
                 let indent = " ".repeat(depth * 2);
-                out.push(vec![(format!("{indent}• "), DIM), (text, TEXT)]);
+                let mut line = vec![(format!("{indent}• "), DIM)];
+                line.extend(spans_line(&text));
+                out.push(line);
             }
             Block::Numbered {
                 depth,
@@ -148,7 +147,9 @@ fn blocks(out: &mut Vec<Line>, text: &str) {
                 text,
             } => {
                 let indent = " ".repeat(depth * 2);
-                out.push(vec![(format!("{indent}{number} "), DIM), (text, TEXT)]);
+                let mut line = vec![(format!("{indent}{number} "), DIM)];
+                line.extend(spans_line(&text));
+                out.push(line);
             }
             Block::Code { lang, lines } => {
                 for (i, l) in lines.iter().cloned().enumerate() {
@@ -162,11 +163,12 @@ fn blocks(out: &mut Vec<Line>, text: &str) {
             Block::Table { header, rows } => {
                 // Колонки по ширине самой длинной ячейки; длинные строки
                 // переносит wrap_line — выравнивание после переноса не держится.
+                // Ширина — по видимому тексту: маркеры `**` и `` ` `` не рисуются.
                 let mut w: Vec<usize> = header.iter().map(|c| c.chars().count()).collect();
                 for r in &rows {
                     for (i, c) in r.iter().enumerate() {
                         if let Some(x) = w.get_mut(i) {
-                            *x = (*x).max(c.chars().count());
+                            *x = (*x).max(visible(c));
                         }
                     }
                 }
@@ -191,19 +193,37 @@ fn blocks(out: &mut Vec<Line>, text: &str) {
                         .collect(),
                 );
                 for r in rows {
-                    out.push(
-                        r.iter()
-                            .enumerate()
-                            .map(|(i, c)| (format!("{}  ", fit(c, i)), TEXT))
-                            .collect(),
-                    );
+                    let mut line = Line::new();
+                    for (i, c) in r.iter().enumerate() {
+                        // Ячейка — спанами, как в окне; добивка — по видимой ширине.
+                        let pad = w.get(i).copied().unwrap_or(0).saturating_sub(visible(c));
+                        let gap = format!("{}  ", " ".repeat(pad));
+                        match spans_line(c).as_slice() {
+                            [(t, fg)] if *fg == TEXT => line.push((format!("{t}{gap}"), TEXT)),
+                            _ => {
+                                line.extend(spans_line(c));
+                                line.push((gap, TEXT));
+                            }
+                        }
+                    }
+                    out.push(line);
                 }
             }
         }
     }
 }
 
-/// Абзац как строка: жирный и код — цветом.
+/// Сколько знаков ячейки видно после разметки.
+fn visible(text: &str) -> usize {
+    markup::spans(text)
+        .iter()
+        .map(|s| match s {
+            Span::Text(t) | Span::Bold(t) | Span::Code(t) => t.chars().count(),
+        })
+        .sum()
+}
+
+/// Строка ответа: жирный и код — цветом.
 fn spans_line(text: &str) -> Line {
     markup::spans(text)
         .into_iter()
@@ -360,6 +380,71 @@ mod tests {
         s.show_trace = true;
         let tape = super::tape(&s);
         assert_eq!(tape.last().unwrap()[0].0, "→ overview");
+    }
+
+    /// `agr:agent-loop`
+    /// В ленте — вопросы и ответы: результаты инструментов и ходы модели из
+    /// одних вызовов не показываются.
+    #[test]
+    fn tools_and_call_only_turns_stay_out_of_the_tape() {
+        let mut s = State::new();
+        let msg = |role: &str, text: &str, name: &str| crate::agent::MsgView {
+            role: role.into(),
+            text: text.into(),
+            index: 0,
+            name: name.into(),
+            is_error: false,
+        };
+        s.messages = vec![
+            msg("user", "вопрос", ""),
+            msg("assistant", "", ""),
+            msg("tool", "a\nb", "schema_fields"),
+            msg("assistant", "ответ", ""),
+        ];
+        let text: Vec<String> = super::tape(&s)
+            .iter()
+            .map(|l| l.iter().map(|(t, _)| t.as_str()).collect())
+            .collect();
+        assert_eq!(text, ["Вы: ", "вопрос", "Модель: ", "ответ"]);
+    }
+
+    /// `agr:markup-shared`
+    /// Пункты списков, заголовки и ячейки таблиц размечаются как в окне:
+    /// маркеры `**` и `` ` `` не видны, жирный и код — цветом.
+    #[test]
+    fn list_heading_and_cells_render_spans() {
+        let mut s = State::new();
+        s.streaming = "## Типы **`Money`**\n\n\
+                       1. **`TransferFunds`** (msgid 160)\n\
+                       \x20  - `amount : decimal128`\n\n\
+                       | тип | поле |\n|---|---|\n| **`Position`** | `amount` |"
+            .into();
+        let tape = super::tape(&s);
+        let text = |l: &Line| l.iter().map(|(t, _)| t.as_str()).collect::<String>();
+        for l in &tape[1..] {
+            assert!(
+                !text(l).contains('*') && !text(l).contains('`'),
+                "{:?}",
+                text(l)
+            );
+        }
+        let colored = |l: &Line, t: &str, c| l.iter().any(|(x, fg)| x == t && *fg == c);
+        assert!(colored(&tape[1], "Money", NAME), "заголовок: {:?}", tape[1]);
+        assert!(
+            colored(&tape[2], "TransferFunds", NAME),
+            "пункт: {:?}",
+            tape[2]
+        );
+        assert!(
+            colored(&tape[3], "amount : decimal128", ACCENT),
+            "подпункт: {:?}",
+            tape[3]
+        );
+        let row = tape.last().unwrap();
+        assert!(colored(row, "Position", NAME) && colored(row, "amount", ACCENT));
+        // Колонки ровные: ширина — по видимому тексту.
+        assert_eq!(text(&tape[tape.len() - 3]), "тип       поле    ");
+        assert_eq!(text(row), "Position  amount  ");
     }
 
     /// Стримящийся ответ виден в ленте последним.

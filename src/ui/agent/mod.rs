@@ -8,7 +8,8 @@
 //!
 //! Файлы: `chat.rs` — лента (строки для TUI, виджеты для окна), `confirm.rs` —
 //! окно подтверждения пачки правок, `settings.rs` — настройки
-//! подключения, `dialogs.rs` — список диалогов.
+//! подключения, `dialogs.rs` — список диалогов, `progress.rs` — индикатор
+//! фазы хода (`agr:agent-progress`).
 //!
 //! Наружу: [`State`], [`Confirm`], [`INPUT_ROWS`], [`INPUT_GROW`], `show`,
 //! [`frame`], [`Act`], [`apply`], [`key`].
@@ -16,6 +17,7 @@
 mod chat;
 mod confirm;
 mod dialogs;
+mod progress;
 mod settings;
 
 use egui;
@@ -48,6 +50,13 @@ pub struct State {
     pub streaming_dialog: Option<String>,
     /// Ход идёт: модель отвечает или ждёт подтверждения.
     pub busy: bool,
+    /// Фаза хода для индикатора и когда она началась (`agr:agent-progress`).
+    pub phase: Option<progress::Wait>,
+    pub since: Option<std::time::Instant>,
+    /// Когда пришёл последний кусок ответа.
+    pub last_delta: Option<std::time::Instant>,
+    /// Итог последнего инструмента хода: `schema_fields → 25 строк`.
+    pub last_tool: Option<String>,
     /// Последняя ошибка.
     pub error: Option<String>,
     /// Вопрос принят в очередь: уйдёт, когда модель закончит.
@@ -110,13 +119,26 @@ impl State {
                 self.streaming.clear();
                 self.busy = true;
                 self.scroll = 0;
+                self.enter(progress::Wait::Thinking);
+                self.last_delta = None;
             }
             Ev::Delta { dialog, text } => {
                 self.streaming_dialog = Some(dialog);
                 self.streaming.push_str(&text);
                 self.busy = true;
                 self.scroll = 0;
+                if self.phase != Some(progress::Wait::Writing) {
+                    self.enter(progress::Wait::Writing);
+                }
+                self.last_delta = Some(std::time::Instant::now());
             }
+            Ev::Tool { name, .. } => self.enter(progress::Wait::Tool(name)),
+            Ev::ToolDone {
+                name,
+                lines,
+                is_error,
+                ..
+            } => self.last_tool = Some(tool_summary(&name, lines, is_error)),
             Ev::Title { dialog, title } => {
                 if let Some(d) = self.dialogs.iter_mut().find(|d| d.id == dialog) {
                     d.title = title;
@@ -125,11 +147,15 @@ impl State {
             Ev::Done { .. } => {
                 self.busy = false;
                 self.notice = None;
+                self.phase = None;
+                self.last_tool = None;
             }
             Ev::Error { text, .. } => {
                 self.error = Some(text);
                 self.busy = false;
                 self.notice = None;
+                self.phase = None;
+                self.last_tool = None;
             }
             Ev::Models(r) => self.models = Some(r),
             Ev::Checked(r) => self.checked = Some(r),
@@ -146,10 +172,40 @@ impl State {
                 self.notice = Some(format!("запрос повторяется (попытка {})…", attempt + 1));
             }
             Ev::ConfirmRequest { tool, summary } => {
+                // Ждём человека, а не модель: индикатор молчит.
                 self.confirm = Some(Confirm { tool, summary });
+                self.phase = None;
             }
             Ev::ToolsProbed(ok) => self.tools_ok = Some(ok),
         }
+    }
+
+    /// Новая фаза хода — с этого мгновения.
+    fn enter(&mut self, phase: progress::Wait) {
+        self.phase = Some(phase);
+        self.since = Some(std::time::Instant::now());
+    }
+
+    /// Индикатор хода на момент `now`; хода нет — `None`.
+    fn indicator(&self, now: std::time::Instant) -> Option<progress::Indicator> {
+        let phase = self.phase.as_ref().filter(|_| self.busy)?;
+        let ago = |t: Option<std::time::Instant>| t.map(|t| now.saturating_duration_since(t));
+        Some(progress::indicator(
+            phase,
+            ago(self.since).unwrap_or_default(),
+            ago(self.last_delta),
+            self.streaming.chars().count(),
+            self.last_tool.as_deref(),
+        ))
+    }
+
+    /// Курсор в конце потока: виден, пока модель пишет, и мигает.
+    fn caret(&self, now: std::time::Instant) -> bool {
+        self.busy
+            && self.phase == Some(progress::Wait::Writing)
+            && self
+                .since
+                .is_some_and(|t| progress::caret_on(now.saturating_duration_since(t)))
     }
 
     /// Выбрать всё, что воркер успел прислать.
@@ -230,6 +286,26 @@ fn wrap_input(input: &str, cursor: usize, w: usize) -> (Vec<String>, usize, usiz
     (lines, crow, ccol)
 }
 
+/// Сообщение в ленте: вопрос или ответ. Результаты инструментов и ходы
+/// модели из одних вызовов — работа хода, а не разговор: их итог виден в
+/// строке состояния, пока ход идёт (`agr:agent-loop`).
+fn in_tape(m: &MsgView) -> bool {
+    match m.role.as_str() {
+        "tool" => false,
+        "assistant" => !m.text.trim().is_empty(),
+        _ => true,
+    }
+}
+
+/// Итог инструмента одной строкой: `schema_fields → 25 строк`.
+fn tool_summary(name: &str, lines: usize, is_error: bool) -> String {
+    if is_error {
+        format!("{name} — ошибка")
+    } else {
+        format!("{name} → {lines} строк")
+    }
+}
+
 pub fn frame(state: &mut State, cols: usize, rows: usize) -> Grid<Act> {
     let mut g: Grid<Act> = Grid::new(cols);
     let rows = rows.max(HEAD + FOOTER + 1);
@@ -292,8 +368,21 @@ pub fn frame(state: &mut State, cols: usize, rows: usize) -> Grid<Act> {
         g.shade(input_y + (crow - base), shift + ccol, 1, ACCENT);
     }
 
-    // Строка состояния.
-    let (status, sf) = if state.busy {
+    // Строка состояния: идёт ход — индикатор фазы (`agr:agent-progress`).
+    // Знаки индикатора — первыми, текст состояния — следом за ними.
+    let mut sx = 0;
+    let (status, sf) = if let Some(ind) = state.indicator(std::time::Instant::now()) {
+        match &ind.look {
+            progress::Look::Dots(b) => {
+                for b in b {
+                    sx = g.put(rows - 1, sx, "•", progress::dot_color(*b));
+                }
+            }
+            progress::Look::Spin(c) => sx = g.put(rows - 1, sx, &c.to_string(), ACCENT),
+        }
+        sx += 1;
+        (format!("{} (Ctrl+A — прервать)", ind.text), OK)
+    } else if state.busy {
         ("модель отвечает… (Ctrl+A — прервать)".to_string(), OK)
     } else if state.confirm.is_some() {
         (
@@ -305,9 +394,9 @@ pub fn frame(state: &mut State, cols: usize, rows: usize) -> Grid<Act> {
     } else {
         ("Enter — отправить · Ctrl+N — диалог".to_string(), DIM)
     };
-    g.put(rows - 1, 0, &status, sf);
+    g.put(rows - 1, sx, &status, sf);
     if let Some(n) = &state.notice {
-        let room = cols.saturating_sub(status.chars().count() + 2);
+        let room = cols.saturating_sub(sx + status.chars().count() + 2);
         let shown = crate::ui::cols::fit(n, room, false);
         g.put_right(rows - 1, cols, &shown, ACCENT);
     }
@@ -423,7 +512,7 @@ pub fn key(state: &mut State, cmd: &CmdTx, k: Key) {
         Key::Right => state.cursor = (state.cursor + 1).min(state.input.chars().count()),
         Key::Home => state.cursor = 0,
         Key::End => state.cursor = state.input.chars().count(),
-        Key::Up | Key::Down => {}
+        Key::Up | Key::Down | Key::Insert => {}
         Key::Char(c) => {
             if state.confirm.is_none() && state.settings_draft.is_none() {
                 let mut ch: Vec<char> = state.input.chars().collect();
@@ -495,22 +584,9 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut State, cmd: &CmdTx) {
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                for m in &state.messages {
-                    if m.role == "tool" {
-                        // Свёрнутая строка сводки: разворачивать нечем — весь
-                        // результат и так уходит модели (`agr:agent-loop`).
-                        let what = if m.is_error {
-                            format!("{} — ошибка", m.name)
-                        } else {
-                            format!("{} → {} строк", m.name, m.text.lines().count().max(1))
-                        };
-                        ui.label(
-                            egui::RichText::new(format!("Инструмент {what}"))
-                                .small()
-                                .color(if m.is_error { ERROR } else { DIM }),
-                        );
-                        continue;
-                    }
+                // Вопросы и ответы; инструменты — в строке состояния
+                // (`agr:agent-loop`).
+                for m in state.messages.iter().filter(|m| in_tape(m)) {
                     chat::message(ui, m);
                 }
                 if !state.streaming.is_empty() {
@@ -524,7 +600,12 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut State, cmd: &CmdTx) {
                             is_error: false,
                         },
                     );
-                    ui.spinner();
+                }
+                if let Some(ind) = state.indicator(std::time::Instant::now()) {
+                    progress::show(ui, &ind);
+                    // Анимация живёт, только пока окно перерисовывается.
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(50));
                 }
                 if let Some(e) = &state.error {
                     ui.colored_label(ERROR, e);
@@ -539,6 +620,87 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut State, cmd: &CmdTx) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `agr:agent-progress`
+    /// Фаза хода идёт за событиями воркера: начало — ждём, кусок — пишет,
+    /// инструмент — его имя, конец — индикатора нет.
+    #[test]
+    fn phase_follows_worker_events() {
+        let mut s = State::new();
+        let d = || "d".to_string();
+        s.apply(Ev::Started { dialog: d() });
+        assert_eq!(s.phase, Some(progress::Wait::Thinking));
+        s.apply(Ev::Delta {
+            dialog: d(),
+            text: "а".into(),
+        });
+        assert_eq!(s.phase, Some(progress::Wait::Writing));
+        s.apply(Ev::Tool {
+            dialog: d(),
+            name: "goto".into(),
+        });
+        assert_eq!(s.phase, Some(progress::Wait::Tool("goto".into())));
+        s.apply(Ev::Done { dialog: d() });
+        assert_eq!(s.phase, None);
+        assert!(s.indicator(std::time::Instant::now()).is_none());
+    }
+
+    /// `agr:agent-progress`
+    /// В TUI строка состояния хода — точки и «модель думает»; пока модель
+    /// пишет, в конце потока стоит курсор.
+    #[test]
+    fn tui_status_shows_phase() {
+        let mut s = State::new();
+        s.apply(Ev::Started { dialog: "d".into() });
+        let g = frame(&mut s, 80, 12);
+        assert!(g.text(11).starts_with("••• модель думает"), "{}", g.text(11));
+        s.apply(Ev::Delta {
+            dialog: "d".into(),
+            text: "привет".into(),
+        });
+        let g = frame(&mut s, 80, 12);
+        assert!(g.text(11).contains("модель пишет · 6 знаков"), "{}", g.text(11));
+        let tape = chat::tape(&s);
+        assert_eq!(tape.last().unwrap().last().unwrap().0, "▍", "курсор потока");
+    }
+
+    /// `agr:agent-progress`
+    /// Результат инструмента посреди хода — итогом в строке состояния; конец
+    /// хода его снимает.
+    #[test]
+    fn tool_result_goes_to_status_line() {
+        let mut s = State::new();
+        s.apply(Ev::Started { dialog: "d".into() });
+        s.apply(Ev::ToolDone {
+            dialog: "d".into(),
+            name: "schema_fields".into(),
+            lines: 3,
+            is_error: false,
+        });
+        s.apply(Ev::Started { dialog: "d".into() });
+        let g = frame(&mut s, 100, 12);
+        assert!(
+            g.text(11).contains("модель думает · schema_fields → 3 строк"),
+            "{}",
+            g.text(11)
+        );
+        s.apply(Ev::Done { dialog: "d".into() });
+        assert_eq!(s.last_tool, None);
+    }
+
+    /// `agr:agent-empty`
+    /// Ошибка хода видна и гасит индикатор.
+    #[test]
+    fn error_is_shown_and_stops_indicator() {
+        let mut s = State::new();
+        s.apply(Ev::Started { dialog: "d".into() });
+        s.apply(Ev::Error {
+            dialog: "d".into(),
+            text: "модель не ответила (finish: content_filter)".into(),
+        });
+        assert!(s.error.as_deref().unwrap().contains("не ответила"));
+        assert!(s.indicator(std::time::Instant::now()).is_none());
+    }
 
     /// Пустое поле ввода подсказывает, что писать; с первым знаком подсказка
     /// исчезает.

@@ -193,9 +193,17 @@ fn window_from_seq_sees_edits_before_it() {
     e.set(5, "Order", "header.order_id", "1002", "105");
     let mut store = Store::new();
     let yaml = store.write(&e).unwrap();
-    let src = Open::file(&path).patch(yaml);
+    let f0 = File::open(&path).unwrap();
+    let srcs: Vec<_> = f0
+        .raw_sources()
+        .into_iter()
+        .map(|mut s| {
+            s.open = s.open.patch(yaml.clone());
+            s
+        })
+        .collect();
     let ctx = Context::new();
-    let m = fetch::from_seq(&ctx, &src, 5, 1).unwrap();
+    let m = fetch::from_seq(&ctx, &srcs, 5, 1).unwrap();
     let f = File::open(&path).unwrap();
     let st = f.scheme.message(m[0].msgid).unwrap();
     assert_eq!(
@@ -275,7 +283,7 @@ fn commit_to_new_file() {
 
     d.reopen(&out).unwrap();
     settle(&mut d);
-    assert_eq!(d.file.path, out);
+    assert_eq!(d.file.name, out.display().to_string());
     assert!(d.file.patch.is_none() && d.edits.is_empty());
     assert_eq!(
         shown(&d, 5, "comment").as_deref(),

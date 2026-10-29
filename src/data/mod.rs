@@ -22,8 +22,9 @@
 //! потоку: найденный seq — файловый. Фиксация — отдельно и по-прежнему через
 //! полный `patch+[lua+]file://` (ручная правка поверх мутации скрипта).
 //!
-//! Наружу: [`File`], [`Worker`], [`Cmd`], [`Ev`], [`View`], [`At`], [`Edge`],
-//! [`Index`], [`Matches`], [`Mutations`], [`fetch`], [`filter`], [`search`].
+//! Наружу: [`File`], [`Part`], [`Worker`], [`Cmd`], [`Ev`], [`View`], [`At`],
+//! [`Edge`], [`Index`], [`Matches`], [`Mutations`], [`fetch`], [`filter`],
+//! [`search`].
 //!
 //! Ещё: [`STEP`], [`Place`], [`shadow`] — тот же диф мутатора зовёт `--dump`;
 //! [`SEQ_PATH`] — «поле» seq в карте [`Mutations`] (исходный seq, если Lua его
@@ -45,7 +46,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::decode;
-use crate::edit::commit::{self, Target};
+use crate::edit::commit;
 use crate::io::{Context, Info, LuaMode, Msg, Open, Reader, Transformer};
 use crate::lua::Filter;
 use crate::scheme::Scheme;
@@ -55,10 +56,38 @@ use crate::scheme::Scheme;
 /// полей не нашли (новое тело не разобралось).
 pub type Mutations = BTreeMap<i64, BTreeMap<String, String>>;
 
-/// Открытый файл: путь, границы seq, схема.
+/// Часть открытого файла: путь и свои границы seq (`agr:glue-parts`).
+#[derive(Debug, Clone)]
+pub struct Part {
+    pub path: PathBuf,
+    pub info: Info,
+}
+
+impl Part {
+    /// Первый seq; пустой части — 0.
+    pub fn begin(&self) -> i64 {
+        self.info.seq_begin.unwrap_or(0)
+    }
+    /// Последний seq; пустой части — −1: чтению она не отвечает.
+    pub fn last(&self) -> i64 {
+        self.info.seq_last.unwrap_or(-1)
+    }
+    fn empty(&self) -> bool {
+        self.info.seq_last.is_none()
+    }
+}
+
+/// Открытый файл — или склейка (`agr:glue-parts`): упорядоченные части с
+/// восходящими непересекающимися диапазонами seq (инвариант тот же, что у карты
+/// rotate+), общие границы и схема последней части (как rotate).
 #[derive(Debug, Clone)]
 pub struct File {
-    pub path: PathBuf,
+    /// Части по возрастанию seq; одиночный файл — одна. Пустые (молодой
+    /// `current.dat`) остаются — чтению они инертны.
+    pub parts: Vec<Part>,
+    /// Имя для человека: путь файла или строка спеки — сессия, титул, агент.
+    pub name: String,
+    /// Общее: begin первой непустой, last последней, формат — последней части.
     pub info: Info,
     pub scheme: Arc<Scheme>,
     /// Схема данных строкой url (`yamls+gz://…`) — мутатору для имён полей.
@@ -72,39 +101,104 @@ pub struct File {
 }
 
 impl File {
-    pub fn open(path: &Path) -> Result<File, String> {
+    /// Открыть по спеке: путь, склейка `a+b+c` или ротация `-N` (`agr:glue-spec`).
+    pub fn open_spec(spec: &str) -> Result<File, String> {
+        let paths = crate::spec::expand(spec)?;
         let ctx = Context::new();
-        let r = Reader::open(&ctx, &Open::file(path))?;
+        let mut parts = Vec::with_capacity(paths.len());
+        let mut scheme = Scheme::default();
+        let mut scheme_url = None;
+        for p in &paths {
+            let r =
+                Reader::open(&ctx, &Open::file(p)).map_err(|e| format!("{}: {e}", p.display()))?;
+            parts.push(Part {
+                path: p.clone(),
+                info: r.info(),
+            });
+            // Схема — последней части, у которой она есть (как rotate).
+            if let Some(u) = r.scheme_url() {
+                scheme_url = Some(u);
+                scheme = r.scheme().unwrap_or_default();
+            }
+        }
+        let filled: Vec<&Part> = parts.iter().filter(|p| !p.empty()).collect();
+        for w in filled.windows(2) {
+            if w[0].last() >= w[1].begin() {
+                return Err(format!(
+                    "склейка не по возрастанию seq: {} кончается {}, а {} начинается с {}",
+                    w[0].path.display(),
+                    w[0].last(),
+                    w[1].path.display(),
+                    w[1].begin()
+                ));
+            }
+        }
+        let mut info = parts.last().map(|p| p.info.clone()).unwrap_or_default();
+        info.seq_begin = filled.first().map(|p| p.begin());
+        info.seq_last = filled.last().map(|p| p.last());
         Ok(File {
-            path: path.to_path_buf(),
-            info: r.info(),
-            scheme: Arc::new(r.scheme().unwrap_or_default()),
-            scheme_url: r.scheme_url(),
+            parts,
+            name: spec.to_string(),
+            info,
+            scheme: Arc::new(scheme),
+            scheme_url,
             patch: None,
             lua: None,
             lua_mode: None,
         })
     }
 
+    /// Открыть один файл: путь — буквальная спека.
+    pub fn open(path: &Path) -> Result<File, String> {
+        Self::open_spec(&path.to_string_lossy())
+    }
+
     /// Что открывать для чтения: файл с правками, без Lua — вид показывает файл
     /// как есть (`agr:transform-shadow`).
-    pub fn source(&self) -> Open {
-        Open::file(&self.path)
-            .backend(self.info.backend)
-            .patch(self.patch.clone())
+    pub fn sources(&self) -> Vec<fetch::Src> {
+        self.parts
+            .iter()
+            .map(|p| fetch::Src {
+                open: Open::file(&p.path).backend(self.info.backend).patch(self.patch.clone()),
+                begin: p.begin(),
+                last: p.last(),
+            })
+            .collect()
     }
 
     /// Что открывать для чтения тел в виде: тот же `patch+file`, но с transform
     /// поверх файла — тела приходят окончательными, как уйдут в файл на
     /// фиксации (`agr:transform-shadow`). Порядок префиксов — `patch+lua+file`:
     /// ручная правка ложится поверх мутации скрипта.
-    pub fn source_transform(&self) -> Open {
-        let mut o = Open::file(&self.path).backend(self.info.backend);
-        if self.transforming() {
-            o.lua = self.lua.clone();
-            o.lua_mode = self.lua_mode;
-        }
-        o.patch(self.patch.clone())
+    pub fn source_transform(&self) -> Vec<fetch::Src> {
+        self.parts
+            .iter()
+            .map(|p| {
+                let mut o = Open::file(&p.path).backend(self.info.backend);
+                if self.transforming() {
+                    o.lua = self.lua.clone();
+                    o.lua_mode = self.lua_mode;
+                }
+                o = o.patch(self.patch.clone());
+                fetch::Src {
+                    open: o,
+                    begin: p.begin(),
+                    last: p.last(),
+                }
+            })
+            .collect()
+    }
+
+    /// Части как есть, без правок и мутатора: диф мутатора и подсчёт строк.
+    pub fn raw_sources(&self) -> Vec<fetch::Src> {
+        self.parts
+            .iter()
+            .map(|p| fetch::Src {
+                open: Open::file(&p.path).backend(self.info.backend),
+                begin: p.begin(),
+                last: p.last(),
+            })
+            .collect()
     }
 
     /// Включён ли transform: есть код и режим Transform.
@@ -189,13 +283,22 @@ pub enum Cmd {
     },
     /// Прочитать сообщение `seq` через кандидат-yaml `patch`: примется ли правка.
     Check { id: u64, patch: PathBuf, seq: i64 },
-    /// Записать файл через правки `patch` в `target` — в фоне, с прогрессом.
+    /// Записать файл через правки `patch` — план за планом, в фоне, с прогрессом.
     Commit {
         patch: Option<PathBuf>,
-        target: Target,
+        plans: Vec<commit::Plan>,
         /// Код Lua-transform — применить его же при записи, а не только чтении.
         lua_code: Option<String>,
         lua_mode: Option<LuaMode>,
+    },
+    /// Seq файла в `[from, to]` — для удаления диапазона (`agr:stream-ops`).
+    Seqs { id: u64, from: i64, to: i64 },
+    /// Последний неудалённый seq не дальше `last` — для прогноза, когда хвост
+    /// удалён (`agr:seq-forecast`).
+    TailAlive {
+        id: u64,
+        last: i64,
+        dead: Vec<i64>,
     },
     /// Просканировать список seq: вернуть те, у которых поле `field_path` есть в схеме.
     /// `seeds` — кандидаты (seq из Matches); `None` — сканировать диапазон.
@@ -259,8 +362,18 @@ pub enum Ev {
         result: Result<Msg, String>,
     },
     CommitProgress(f32),
-    /// Фиксация закончилась: путь результата или ошибка (исходник цел).
-    Committed(Result<PathBuf, String>),
+    /// Фиксация закончилась: итоги по планам или ошибка (исходники целы).
+    Committed(Result<Vec<commit::Committed>, String>),
+    /// Ответ на [`Cmd::Seqs`]: (seq, msgid) и первый seq после диапазона.
+    Seqs {
+        id: u64,
+        result: Result<fetch::FileSeqs, String>,
+    },
+    /// Ответ на [`Cmd::TailAlive`].
+    TailAlive {
+        id: u64,
+        result: Result<Option<i64>, String>,
+    },
     /// Результат MassScan: пары (seq, имя_типа) для сообщений с нужным полем.
     MassScan {
         id: u64,
@@ -355,11 +468,20 @@ fn spawn_index(
     notify: &Notify,
     slot: &Arc<Mutex<Option<Arc<Index>>>>,
 ) {
-    let (file, tx, notify, slot) = (file.clone(), tx.clone(), notify.clone(), slot.clone());
+    let parts: Vec<(PathBuf, i64, i64)> = file
+        .parts
+        .iter()
+        .map(|p| (p.path.clone(), p.begin(), p.last()))
+        .collect();
+    let (tx, notify, slot) = (tx.clone(), notify.clone(), slot.clone());
     std::thread::spawn(move || {
         let stop = Arc::new(AtomicBool::new(false));
         let mut last = 0.0;
-        let r = index::build(&file.path, file.begin(), file.last(), &stop, |p| {
+        let list: Vec<(&Path, i64, i64)> = parts
+            .iter()
+            .map(|(p, b, l)| (p.as_path(), *b, *l))
+            .collect();
+        let r = index::build(&list, &stop, |p| {
             if p - last >= 0.02 || p >= 1.0 {
                 last = p;
                 emit(&tx, &notify, Ev::IndexProgress(p));
@@ -484,7 +606,7 @@ fn run(
                     let (file, tx, notify, stop) =
                         (file.clone(), tx.clone(), notify.clone(), job.stop.clone());
                     std::thread::spawn(move || {
-                        scan::filter(&file, &filter, file.begin(), file.last(), &stop, &m, || {
+                        scan::filter(&file, &filter, &stop, &m, || {
                             emit(&tx, &notify, Ev::FilterTick { id })
                         });
                     });
@@ -500,15 +622,7 @@ fn run(
                     let (file, tx, notify, stop) =
                         (file.clone(), tx.clone(), notify.clone(), job.stop.clone());
                     std::thread::spawn(move || {
-                        let r = scan::search(
-                            &file,
-                            &filter,
-                            from,
-                            back,
-                            file.begin(),
-                            file.last(),
-                            &stop,
-                        );
+                        let r = scan::search(&file, &filter, from, back, &stop);
                         if stop.load(Ordering::Relaxed) {
                             return;
                         }
@@ -528,38 +642,53 @@ fn run(
                     report_tx_err(&tx, &notify, &mut tx_err, None);
                 }
                 Cmd::Check { id, patch, seq } => {
-                    let src = file.source_transform().patch(Some(patch));
-                    let result = check(&ctx, &src, seq);
+                    let srcs = file.source_transform();
+                    let result = match fetch::Src::part_of(&srcs, seq) {
+                        Some(j) => check(&ctx, &srcs[j].open.clone().patch(Some(patch)), seq),
+                        None => Err(format!("seq {seq} за концом файла")),
+                    };
                     emit(&tx, &notify, Ev::Checked { id, result });
                 }
                 Cmd::Commit {
                     patch,
-                    target,
+                    plans,
                     lua_code,
                     lua_mode,
                 } => {
                     let job = Job::new();
-                    let (src, tx, notify, stop) = (
-                        file.path.clone(),
+                    let (plans, tx, notify, stop) = (
+                        plans.clone(),
                         tx.clone(),
                         notify.clone(),
                         job.stop.clone(),
                     );
                     let code = lua_code.clone();
-                    let mode = lua_mode;
                     std::thread::spawn(move || {
-                        let r = commit::run(
-                            &src,
+                        let r = commit::run_all(
+                            &plans,
                             patch.as_deref(),
-                            &target,
                             &stop,
-                            code.as_deref(),
-                            mode,
+                            code.as_deref().map(|c| (c, lua_mode)),
                             |p| emit(&tx, &notify, Ev::CommitProgress(p)),
                         );
                         emit(&tx, &notify, Ev::Committed(r));
                     });
                     commit_job = Some(job);
+                }
+                Cmd::Seqs { id, from, to } => {
+                    let result = fetch::seqs_in(&ctx, &file.raw_sources(), from, to);
+                    emit(&tx, &notify, Ev::Seqs { id, result });
+                }
+                Cmd::TailAlive { id, last, dead } => {
+                    let dead: std::collections::BTreeSet<i64> = dead.into_iter().collect();
+                    let result = fetch::alive_before(
+                        &ctx,
+                        &file.raw_sources(),
+                        file.begin(),
+                        last,
+                        |s| dead.contains(&s),
+                    );
+                    emit(&tx, &notify, Ev::TailAlive { id, result });
                 }
                 Cmd::MassScan {
                     id,
@@ -569,7 +698,7 @@ fn run(
                     field_path,
                     scheme,
                 } => {
-                    let src = file.source();
+                    let srcs = file.sources();
                     let tx = tx.clone();
                     let notify = notify.clone();
                     std::thread::spawn(move || {
@@ -577,10 +706,12 @@ fn run(
                         let mut pairs = Vec::new();
                         if let Some(seeds) = seeds {
                             for &seed in &seeds {
-                                if let Some(m) = Reader::open(&ctx, &src.clone().at(seed))
-                                    .ok()
-                                    .and_then(|mut r| r.next())
-                                {
+                                let m = fetch::Src::part_of(&srcs, seed)
+                                    .and_then(|j| {
+                                        Reader::open(&ctx, &srcs[j].open.clone().at(seed)).ok()
+                                    })
+                                    .and_then(|mut r| r.next());
+                                if let Some(m) = m {
                                     let msg = scheme.message(m.msgid);
                                     if msg.is_some_and(|st| {
                                         scheme.field_path(st, &field_path).is_some()
@@ -592,19 +723,29 @@ fn run(
                                     }
                                 }
                             }
-                        } else if let Ok(r) = Reader::open(&ctx, &src.clone().at(begin).meta()) {
-                            for m in r {
-                                if m.seq > last {
-                                    break;
+                        } else {
+                            'parts: for s in &srcs {
+                                if s.last < begin {
+                                    continue;
                                 }
-                                let msg = scheme.message(m.msgid);
-                                if msg
-                                    .is_some_and(|st| scheme.field_path(st, &field_path).is_some())
-                                {
-                                    let name = msg
-                                        .map(|s| s.name.clone())
-                                        .unwrap_or_else(|| format!("#{}", m.msgid));
-                                    pairs.push((m.seq, name));
+                                let Ok(mut r) =
+                                    Reader::open(&ctx, &s.open.clone().at(begin.max(s.begin)).meta())
+                                else {
+                                    continue;
+                                };
+                                for m in r.by_ref() {
+                                    if m.seq > last {
+                                        break 'parts;
+                                    }
+                                    let msg = scheme.message(m.msgid);
+                                    if msg.is_some_and(|st| {
+                                        scheme.field_path(st, &field_path).is_some()
+                                    }) {
+                                        let name = msg
+                                            .map(|s| s.name.clone())
+                                            .unwrap_or_else(|| format!("#{}", m.msgid));
+                                        pairs.push((m.seq, name));
+                                    }
                                 }
                             }
                         }
@@ -749,11 +890,8 @@ pub const SEQ_PATH: &str = "seq";
 
 /// Окно как читает его вид, но сырым из файла — для [`shadow`]: те же позиция
 /// и размер, без мутатора и правок.
-pub(crate) fn raw_window(
-    f: &File,
-    load: &dyn Fn(&Open) -> Result<Vec<Msg>, String>,
-) -> Result<Vec<Msg>, String> {
-    load(&Open::file(&f.path).backend(f.info.backend))
+pub(crate) fn raw_window(f: &File, load: LoadFn<'_>) -> Result<Vec<Msg>, String> {
+    load(&f.raw_sources())
 }
 
 /// Аргументы чтения окна: контекст libtll, файл и мутатор (если включён).
@@ -768,7 +906,7 @@ fn window(r: Read, view: &View, idx: Option<&Index>, at: At, n: usize) -> Result
     let (begin, last) = (f.begin(), f.last());
     match view {
         View::All => {
-            let load = |src: &Open| match at {
+            let load = |src: &[fetch::Src]| match at {
                 // Seq за концом файла новый libtll не открывает — встаём на последний.
                 At::Seq(s) => fetch::from_seq(ctx, src, s.min(last), n),
                 At::Row(r) => match idx {
@@ -784,14 +922,9 @@ fn window(r: Read, view: &View, idx: Option<&Index>, at: At, n: usize) -> Result
                     Ok(rows)
                 }
             };
-            let (rows, fallback_err) = read_with_fallback(f, &load)?;
+            let (rows, fallback_err) = read_with_fallback(f, load)?;
             let first_row = match (idx, rows.first()) {
-                (Some(i), Some(m)) => Some(fetch::row_of(
-                    ctx,
-                    &Open::file(&f.path).backend(f.info.backend),
-                    i,
-                    m.seq,
-                )?),
+                (Some(i), Some(m)) => Some(fetch::row_of(ctx, &f.raw_sources(), i, m.seq)?),
                 _ => None,
             };
             let at_start = rows.first().is_none_or(|m| m.seq <= begin);
@@ -815,8 +948,8 @@ fn window(r: Read, view: &View, idx: Option<&Index>, at: At, n: usize) -> Result
                 At::End => total.saturating_sub(n),
                 At::Around(s, before) => m.row_of(s).saturating_sub(before),
             };
-            let load = |src: &Open| fetch::by_seqs(ctx, src, &m.slice(row, n));
-            let (rows, fallback_err) = read_with_fallback(f, &load)?;
+            let load = |src: &[fetch::Src]| fetch::by_seqs(ctx, src, &m.slice(row, n));
+            let (rows, fallback_err) = read_with_fallback(f, load)?;
             let at_end = row + rows.len() >= total && m.is_done();
             let (mutated, terr) = shadow_after(fallback_err, f, tx, &rows, &load);
             Ok(reply(
@@ -832,20 +965,23 @@ fn window(r: Read, view: &View, idx: Option<&Index>, at: At, n: usize) -> Result
     }
 }
 
+/// Загрузчик окна: шаблоны частей → сообщения (вид, transform, сырой файл).
+type LoadFn<'a> = &'a dyn Fn(&[fetch::Src]) -> Result<Vec<Msg>, String>;
+
 /// Прочитать окно через transform-канал (`patch+lua+file`); если transform
 /// сломался на чтении (битый код, ошибка исполнения) — откатиться к сырому
 /// чтению (`patch+file`) и вернуть текст ошибки, чтобы скрипт не ронял вид
 /// (`agr:transform-shadow`). При выключенном transform — сразу сырое чтение.
 fn read_with_fallback(
     f: &File,
-    load: impl Fn(&Open) -> Result<Vec<Msg>, String>,
+    load: impl Fn(&[fetch::Src]) -> Result<Vec<Msg>, String>,
 ) -> Result<(Vec<Msg>, Option<String>), String> {
     if !f.transforming() {
-        return Ok((load(&f.source())?, None));
+        return Ok((load(&f.sources())?, None));
     }
     match load(&f.source_transform()) {
         Ok(rows) => Ok((rows, None)),
-        Err(e) => match load(&f.source()) {
+        Err(e) => match load(&f.sources()) {
             Ok(rows) => Ok((rows, Some(e))),
             Err(raw) => Err(raw),
         },
@@ -859,7 +995,7 @@ fn shadow_after(
     f: &File,
     tx: Option<&mut Transformer>,
     rows: &[Msg],
-    load: &dyn Fn(&Open) -> Result<Vec<Msg>, String>,
+    load: LoadFn<'_>,
 ) -> (Mutations, Option<String>) {
     match fallback_err {
         Some(e) => (Mutations::new(), Some(e)),
@@ -873,7 +1009,7 @@ fn shadow_or_empty(
     f: &File,
     tx: Option<&mut Transformer>,
     rows: &[Msg],
-    load: &dyn Fn(&Open) -> Result<Vec<Msg>, String>,
+    load: LoadFn<'_>,
 ) -> (Mutations, Option<String>) {
     match tx {
         Some(tx) => match raw_window(f, load).and_then(|raw| shadow(f, tx, &raw, rows)) {
@@ -907,8 +1043,8 @@ fn extend(
                         None,
                     ));
                 }
-                let load = |src: &Open| fetch::from_seq(ctx, src, edge.seq + 1, n);
-                let (rows, fallback_err) = read_with_fallback(f, &load)?;
+                let load = |src: &[fetch::Src]| fetch::from_seq(ctx, src, edge.seq + 1, n);
+                let (rows, fallback_err) = read_with_fallback(f, load)?;
                 let at_end = rows.len() < n || rows.last().is_some_and(|m| m.seq >= f.last());
                 let first = edge.row.map(|r| r + 1);
                 let (mutated, terr) = shadow_after(fallback_err, f, tx, &rows, &load);
@@ -922,20 +1058,15 @@ fn extend(
                     terr,
                 ))
             } else {
-                let load = |src: &Open| fetch::before_seq(ctx, src, edge.seq, n, f.begin());
-                let (rows, fallback_err) = read_with_fallback(f, &load)?;
+                let load = |src: &[fetch::Src]| {
+                    fetch::before_seq(ctx, src, edge.seq, n, f.begin())
+                };
+                let (rows, fallback_err) = read_with_fallback(f, load)?;
                 let first = edge.row.and_then(|r| r.checked_sub(rows.len()));
                 let first = first.or_else(|| {
                     idx.and_then(|i| {
-                        rows.first().and_then(|m| {
-                            fetch::row_of(
-                                ctx,
-                                &Open::file(&f.path).backend(f.info.backend),
-                                i,
-                                m.seq,
-                            )
-                            .ok()
-                        })
+                        rows.first()
+                            .and_then(|m| fetch::row_of(ctx, &f.raw_sources(), i, m.seq).ok())
                     })
                 });
                 let at_start = rows.len() < n || rows.first().is_some_and(|m| m.seq <= f.begin());
@@ -955,8 +1086,8 @@ fn extend(
             let row = edge.row.unwrap_or_else(|| m.row_of(edge.seq));
             if after {
                 let from = row + 1;
-                let load = |src: &Open| fetch::by_seqs(ctx, src, &m.slice(from, n));
-                let (rows, fallback_err) = read_with_fallback(f, &load)?;
+                let load = |src: &[fetch::Src]| fetch::by_seqs(ctx, src, &m.slice(from, n));
+                let (rows, fallback_err) = read_with_fallback(f, load)?;
                 let at_end = from + rows.len() >= m.len() && m.is_done();
                 let (mutated, terr) = shadow_after(fallback_err, f, tx, &rows, &load);
                 Ok(reply(
@@ -970,8 +1101,10 @@ fn extend(
                 ))
             } else {
                 let from = row.saturating_sub(n);
-                let load = |src: &Open| fetch::by_seqs(ctx, src, &m.slice(from, row - from));
-                let (rows, fallback_err) = read_with_fallback(f, &load)?;
+                let load = |src: &[fetch::Src]| {
+                    fetch::by_seqs(ctx, src, &m.slice(from, row - from))
+                };
+                let (rows, fallback_err) = read_with_fallback(f, load)?;
                 let (mutated, terr) = shadow_after(fallback_err, f, tx, &rows, &load);
                 Ok(reply(
                     Place::Before,

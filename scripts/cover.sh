@@ -28,6 +28,8 @@ data/ 94
 columns.rs 96
 desk.rs 84
 session.rs 86
+recent.rs 90
+spec.rs 96
 edit/ 95
 agent/ 62
 markup.rs 99

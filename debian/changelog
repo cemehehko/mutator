@@ -1,5 +1,66 @@
-tll-mutator (0.1.0+ubuntu20.04) unstable; urgency=medium
+tll-mutator (0.0.13+ubuntu20.04) unstable; urgency=medium
+
+  * Агент: вызовы инструментов не теряются в потоке provod (usage и
+    finish_reason в одном кадре); поиск search_messages не зависает на куске
+    без совпадений; пустой ответ модели — сообщение, а не тишина.
+  * Ход агента виден: «модель думает» с переливающимися точками, «пишет»,
+    «инструмент …» со временем и итог инструмента в строке состояния; в ленте
+    — только вопросы и ответы.
+  * TUI: разметка в списках, заголовках и таблицах ответа как в окне.
+  * Справка: фильтр по списку значений — таблица-множество.
+
+ -- Andrew <cemehehko@mail.ru>  Fri, 23 Oct 2026 01:22:06 +0300
+
+tll-mutator (0.0.12+ubuntu20.04) unstable; urgency=medium
+
+  * Несколько файлов одним видом: склейка a.dat+b.dat и файлы ротации назад
+    (текущий.dat-N); фиксация правит каждый файл отдельно — имена по новым
+    границам, опустевшая часть файла-результата не оставляет.
+
+ -- Andrew <cemehehko@mail.ru>  Sun, 18 Oct 2026 15:04:53 +0300
+
+tll-mutator (0.0.11+ubuntu20.04) unstable; urgency=medium
+
+  * Состав потока: удаление (со сдвигом seq или дырой), вставка копии,
+    смена типа, метка-диапазон, отмена; прогноз последнего seq на фиксации.
+
+ -- Andrew <cemehehko@mail.ru>  Wed, 14 Oct 2026 02:45:58 +0300
+
+tll-mutator (0.0.10+ubuntu20.04) unstable; urgency=medium
+
+  * Тесты-предохранители поведения End у растущего файла: снимок на момент
+    открытия, обновление только с последней строки, гонки чтения.
+  * Слой требований (сценарии → требования → договорённости → тесты и ручные
+    проверки) с машинными проверками и бюджетами файлов уровней.
+
+ -- Andrew <cemehehko@mail.ru>  Tue, 13 Oct 2026 22:22:08 +0300
+
+tll-mutator (0.0.9-1) unstable; urgency=medium
+
+  * End с последней строки надёжно встаёт на новую последнюю (а не посреди файла).
+
+ -- Andrew <cemehehko@mail.ru>  Sat, 10 Oct 2026 13:05:00 +0300
+
+tll-mutator (0.0.8-1) unstable; urgency=medium
+
+  * End с последней строки перечитывает файл и встаёт на новую последнюю.
+
+ -- Andrew <cemehehko@mail.ru>  Sat, 10 Oct 2026 12:20:00 +0300
+
+tll-mutator (0.0.7-1) unstable; urgency=medium
+
+  * reload сохраняет место и сообщает, сколько строк дописалось.
+
+ -- Andrew <cemehehko@mail.ru>  Sat, 10 Oct 2026 11:00:00 +0300
+
+tll-mutator (0.0.6-1) unstable; urgency=medium
+
+  * relod: r и ↓/PgDn на последней строке перечитывают растущий файл.
+
+ -- Andrew <cemehehko@mail.ru>  Sat, 10 Oct 2026 10:00:00 +0300
+
+tll-mutator (0.0.5-1) unstable; urgency=medium
 
   * Initial release.
 
- -- Andrew <andrew@cemehehko@mail.ru>  Mon, 05 Oct 2026 12:00:00 +0300
+ -- Andrew <cemehehko@mail.ru>  Mon, 05 Oct 2026 12:00:00 +0300

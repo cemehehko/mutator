@@ -87,15 +87,16 @@ pub fn count(bytes: u64, per_thread: usize) -> usize {
     threads(usize::MAX, bytes) * per_thread
 }
 
-/// Пройти куски параллельно. `work` читает кусок в контексте своего потока и
-/// отдаёт читателю флаг `halt`; `ready` получает результаты по порядку и
-/// возвращает `false`, чтобы остановить остальные. `stop` — внешняя отмена: проход
-/// её только читает, иначе вызывающий не отличил бы отмену от «нашли, хватит».
+/// Пройти куски параллельно. `work` читает кусок (с его номером — кусок может
+/// нести и часть склейки) в контексте своего потока и отдаёт читателю флаг
+/// `halt`; `ready` получает результаты по порядку и возвращает `false`, чтобы
+/// остановить остальные. `stop` — внешняя отмена: проход её только читает, иначе
+/// вызывающий не отличил бы отмену от «нашли, хватит».
 pub fn run<R: Send>(
     chunks: &[Chunk],
     bytes: u64,
     stop: &Arc<AtomicBool>,
-    work: impl Fn(&Context, Chunk, &Arc<AtomicBool>) -> R + Sync,
+    work: impl Fn(&Context, usize, Chunk, &Arc<AtomicBool>) -> R + Sync,
     ready: impl FnMut(usize, R) -> bool,
 ) {
     run_state(
@@ -103,7 +104,7 @@ pub fn run<R: Send>(
         bytes,
         stop,
         |_| (),
-        |ctx, (), c, halt| work(ctx, c, halt),
+        |ctx, (), i, c, halt| work(ctx, i, c, halt),
         ready,
     )
 }
@@ -118,7 +119,7 @@ pub fn run_state<R: Send, S>(
     bytes: u64,
     stop: &Arc<AtomicBool>,
     init: impl Fn(&Context) -> S + Sync,
-    work: impl Fn(&Context, &mut S, Chunk, &Arc<AtomicBool>) -> R + Sync,
+    work: impl Fn(&Context, &mut S, usize, Chunk, &Arc<AtomicBool>) -> R + Sync,
     mut ready: impl FnMut(usize, R) -> bool,
 ) {
     let halt = Arc::new(AtomicBool::new(false));
@@ -138,7 +139,7 @@ pub fn run_state<R: Send, S>(
                     if i >= chunks.len() || halt.load(Ordering::Relaxed) {
                         break;
                     }
-                    let r = work(&ctx, &mut state, chunks[i], &halt);
+                    let r = work(&ctx, &mut state, i, chunks[i], &halt);
                     if tx.send((i, r)).is_err() {
                         break;
                     }
@@ -211,7 +212,7 @@ mod tests {
             &chunks,
             u64::MAX,
             &stop,
-            |_, (a, _), _| a,
+            |_, _, (a, _), _| a,
             |i, a| {
                 got.push((i, a));
                 i < 20
@@ -243,10 +244,7 @@ mod tests {
             },
             {
                 let works = works.clone();
-                move |_, _, _, _| {
-                    works.fetch_add(1, Ordering::Relaxed);
-                    ()
-                }
+                move |_, _, _, _, _| works.fetch_add(1, Ordering::Relaxed)
             },
             |_, _| true,
         );

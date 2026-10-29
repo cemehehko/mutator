@@ -1,4 +1,6 @@
-//! Колонки таблицы: seq и name всегда, дальше — пути полей.
+//! Колонки таблицы: seq и name всегда, дальше — пути полей; плюс псевдополе
+//! [`DATA_LEN`] — размер сообщения, как в Lua-фильтре `#data`
+//! (`agr:size-column`).
 //!
 //! Пресет — набор путей. Встроенный «orders» (`header.ts`, `header.status`,
 //! `header.order_id`, `symbol`, `side`, `price`, `amt`) берёт только пути,
@@ -49,6 +51,11 @@ const ORDERS: &[&str] = &[
     "amt",
 ];
 
+/// Псевдоимя колонки размера сообщения: `#data` — как в Lua-фильтре, где `#data`
+/// возвращает длину тела в байтах (`agr:size-column`). Путей полей с таким
+/// именем не бывает: в путях идентификаторы разделены точкой, `#` не входит.
+pub const DATA_LEN: &str = "#data";
+
 /// Путь к файлу пресетов пользователя.
 pub fn config_path() -> Option<PathBuf> {
     Some(crate::session::config_dir()?.join("presets.toml"))
@@ -59,7 +66,7 @@ pub fn config_path() -> Option<PathBuf> {
 /// без полей.
 pub fn presets(scheme: &Scheme, user: Option<&str>) -> Vec<Preset> {
     let known = all_paths(scheme);
-    let has = |p: &String| known.iter().any(|(k, _)| k == p);
+    let has = |p: &String| p == DATA_LEN || known.iter().any(|(k, _)| k == p);
     let class = scheme.option("schemaClassName");
     let mut out = Vec::new();
     if let Some(text) = user {

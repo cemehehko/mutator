@@ -8,7 +8,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui;
 use tui_patch::data::File;
 use tui_patch::desk::Desk;
 use tui_patch::io;

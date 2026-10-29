@@ -96,7 +96,7 @@ impl Bar {
                 if !d.edits.is_empty()
                     && ui
                         .button(
-                            egui::RichText::new(format!("Зафиксировать ({})", d.edits.fields()))
+                            egui::RichText::new(format!("Зафиксировать ({})", d.edits.count()))
                                 .color(EDITED),
                         )
                         .on_hover_text("w — записать правки в новый файл")

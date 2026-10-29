@@ -1,8 +1,10 @@
 //!
 //! Клиент к модели: один вызов `POST {base}/chat/completions` потоком
 //! ([`chat_stream`]) и разово ([`chat_once`]). Разбор потока SSE — чистая
-//! функция [`parse_payload`]: payload кадра превращает в [`Chunk`] — кусок
-//! текста, добавка к вызову инструмента или счёт токенов. По нему собирается
+//! функция [`parse_payload`]: payload кадра превращает в список [`Chunk`] —
+//! куски текста, добавки к вызовам инструментов, счёт токенов, причина конца.
+//! Список, а не одна часть: сервер вправе положить всё в один кадр
+//! (`agr:agent-frame`). По нему собирается
 //! [`ToolCall`] из склеенных кусков аргументов.
 //!
 //! На провод диалог собирает [`wire_messages`]: системный промпт первым,
@@ -81,47 +83,69 @@ pub enum Chunk {
 
 /// Разобрать payload кадра SSE (транспорт его уже вытащил): `None` — кадр
 /// ничего не несёт (`[DONE]`, неразобранный JSON).
-pub fn parse_payload(payload: &str) -> Option<Chunk> {
+pub fn parse_payload(payload: &str) -> Vec<Chunk> {
     let payload = payload.trim();
     if payload.is_empty() || payload == "[DONE]" {
-        return None;
+        return Vec::new();
     }
-    let v: Value = serde_json::from_str(payload).ok()?;
-    if let Some(total) = usage_total(&v) {
-        return Some(Chunk::Usage(total));
-    }
-    let choice = v.get("choices")?.as_array()?.first()?.clone();
-    if let Some(finish) = choice.get("finish_reason").and_then(|f| f.as_str()) {
-        return Some(Chunk::Finish(finish.to_string()));
-    }
-    let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
-    if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
-        if !text.is_empty() {
-            return Some(Chunk::Text(text.to_string()));
-        }
-    }
-    let call = delta.get("tool_calls")?.as_array()?.first()?.clone();
-    let pick = |path: &[&str]| {
-        let mut cur = &call;
-        for key in path {
-            cur = cur.get(*key)?;
-        }
-        cur.as_str().map(|s| s.to_string())
+    let Ok(v) = serde_json::from_str::<Value>(payload) else {
+        return Vec::new();
     };
-    Some(Chunk::Call {
-        index: call
-            .get("index")
-            .and_then(|i| i.as_u64())
-            .map(|i| i as usize),
-        id: pick(&["id"]),
-        name: pick(&["function", "name"]),
-        arguments: pick(&["function", "arguments"]),
-    })
+    // Кадр несёт сразу несколько частей: provod кладёт `usage` в каждый кадр,
+    // вызов приходит вместе с `finish_reason` — ни одна не теряется
+    // (`agr:agent-frame`).
+    let mut out = Vec::new();
+    let choice = v
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first());
+    let delta = choice.and_then(|c| c.get("delta"));
+    if let Some(text) = delta
+        .and_then(|d| d.get("content"))
+        .and_then(|c| c.as_str())
+    {
+        if !text.is_empty() {
+            out.push(Chunk::Text(text.to_string()));
+        }
+    }
+    let calls = delta
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(|c| c.as_array());
+    for call in calls.into_iter().flatten() {
+        let pick = |path: &[&str]| {
+            let mut cur = call;
+            for key in path {
+                cur = cur.get(*key)?;
+            }
+            cur.as_str().map(|s| s.to_string())
+        };
+        out.push(Chunk::Call {
+            index: call
+                .get("index")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as usize),
+            id: pick(&["id"]),
+            name: pick(&["function", "name"]),
+            arguments: pick(&["function", "arguments"]),
+        });
+    }
+    if let Some(total) = usage_total(&v) {
+        out.push(Chunk::Usage(total));
+    }
+    if let Some(finish) = choice
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|f| f.as_str())
+    {
+        out.push(Chunk::Finish(finish.to_string()));
+    }
+    out
 }
 
 #[cfg(test)]
 fn parse_event(line: &str) -> Option<Chunk> {
     parse_payload(line.trim().strip_prefix("data:")?.trim())
+        .into_iter()
+        .next()
 }
 
 /// Собрать вызовы инструментов из накопленных кусков: безымянный слот —
@@ -476,56 +500,57 @@ pub async fn chat_stream(
             Ok(None) => break,
             Ok(Some(ev)) => ev.map_err(|e| format!("поток LLM: {e}"))?,
         };
-        match parse_payload(&ev.data) {
-            Some(Chunk::Text(text)) => {
-                on_text(&text);
-                reply.content.push_str(&text);
-            }
-            Some(Chunk::Usage(tokens)) => reply.tokens = Some(tokens),
-            Some(Chunk::Finish(finish)) => {
-                reply.finish = Some(finish);
-                tail = Some(std::time::Instant::now());
-            }
-            Some(Chunk::Call {
-                index,
-                id,
-                name,
-                arguments,
-            }) => {
-                // Слот: с id — новый; с index — по номеру; без всего —
-                // продолжение последнего.
-                let slot = if id.is_some() {
-                    acc.push(ToolCall {
-                        id: String::new(),
-                        name: String::new(),
-                        arguments: String::new(),
-                    });
-                    acc.last_mut().unwrap()
-                } else if let Some(i) = index {
-                    while acc.len() <= i {
+        for chunk in parse_payload(&ev.data) {
+            match chunk {
+                Chunk::Text(text) => {
+                    on_text(&text);
+                    reply.content.push_str(&text);
+                }
+                Chunk::Usage(tokens) => reply.tokens = Some(tokens),
+                Chunk::Finish(finish) => {
+                    reply.finish = Some(finish);
+                    tail = Some(std::time::Instant::now());
+                }
+                Chunk::Call {
+                    index,
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    // Слот: с id — новый; с index — по номеру; без всего —
+                    // продолжение последнего.
+                    let slot = if id.is_some() {
                         acc.push(ToolCall {
                             id: String::new(),
                             name: String::new(),
                             arguments: String::new(),
                         });
+                        acc.last_mut().unwrap()
+                    } else if let Some(i) = index {
+                        while acc.len() <= i {
+                            acc.push(ToolCall {
+                                id: String::new(),
+                                name: String::new(),
+                                arguments: String::new(),
+                            });
+                        }
+                        &mut acc[i]
+                    } else if let Some(last) = acc.last_mut() {
+                        last
+                    } else {
+                        continue;
+                    };
+                    if let Some(id) = id {
+                        slot.id = id;
                     }
-                    &mut acc[i]
-                } else if let Some(last) = acc.last_mut() {
-                    last
-                } else {
-                    continue;
-                };
-                if let Some(id) = id {
-                    slot.id = id;
-                }
-                if let Some(name) = name {
-                    slot.name = name;
-                }
-                if let Some(args) = arguments {
-                    slot.arguments.push_str(&args);
+                    if let Some(name) = name {
+                        slot.name = name;
+                    }
+                    if let Some(args) = arguments {
+                        slot.arguments.push_str(&args);
+                    }
                 }
             }
-            None => {}
         }
     }
     let (calls, dropped) = collect_calls(&acc);
@@ -641,18 +666,16 @@ pub async fn probe_tools(settings: &Settings) -> bool {
         }],
         "max_tokens": 1,
     });
-    let resp = client(settings)
-        .ok()
-        .map(|c| {
-            c.post(&url)
-                .header(
-                    reqwest::header::AUTHORIZATION,
-                    format!("Bearer {}", settings.api_key),
-                )
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .json(&body)
-                .send()
-        });
+    let resp = client(settings).ok().map(|c| {
+        c.post(&url)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", settings.api_key),
+            )
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+    });
     match resp {
         Some(fut) => match fut.await {
             Ok(r) => {
@@ -989,9 +1012,56 @@ mod tests {
         // Транспорт отдаёт payload без префикса `data:`.
         assert_eq!(
             parse_payload(r#"{"choices":[{"delta":{"content":"привет"}}]}"#),
-            Some(Chunk::Text("привет".into()))
+            vec![Chunk::Text("привет".into())]
         );
-        assert_eq!(parse_payload("[DONE]"), None);
+        assert_eq!(parse_payload("[DONE]"), Vec::new());
+    }
+
+    /// `agr:agent-frame`
+    /// Кадр provod: вызов, `usage` и `finish_reason` в одном кадре — все три
+    /// части доходят, вызов не теряется.
+    #[test]
+    fn frame_with_call_usage_and_finish_keeps_all_parts() {
+        let frame = r#"{"choices":[{"delta":{"content":"","tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"file_overview","arguments":"{}"}}]},"finish_reason":"tool_calls","index":0}],"usage":{"prompt_tokens":3000,"completion_tokens":5,"total_tokens":3005}}"#;
+        assert_eq!(
+            parse_payload(frame),
+            vec![
+                Chunk::Call {
+                    index: Some(0),
+                    id: Some("c1".into()),
+                    name: Some("file_overview".into()),
+                    arguments: Some("{}".into()),
+                },
+                Chunk::Usage(3005),
+                Chunk::Finish("tool_calls".into()),
+            ]
+        );
+    }
+
+    /// `agr:agent-frame`
+    /// `usage` в каждом кадре не глушит текст.
+    #[test]
+    fn usage_in_every_frame_keeps_text() {
+        let frame = r#"{"choices":[{"delta":{"content":"привет"},"finish_reason":null}],"usage":{"total_tokens":9}}"#;
+        assert_eq!(
+            parse_payload(frame),
+            vec![Chunk::Text("привет".into()), Chunk::Usage(9)]
+        );
+    }
+
+    /// `agr:agent-frame`
+    /// Несколько вызовов в одной дельте — каждый своей частью.
+    #[test]
+    fn several_calls_in_one_delta_are_all_parsed() {
+        let frame = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"f0","arguments":"{}"}},{"index":1,"id":"b","function":{"name":"f1","arguments":"{}"}}]}}]}"#;
+        let names: Vec<_> = parse_payload(frame)
+            .into_iter()
+            .filter_map(|c| match c {
+                Chunk::Call { name, .. } => name,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["f0", "f1"]);
     }
 
     /// id приходит не первым кадром дельты: документируем текущее поведение
@@ -1004,25 +1074,51 @@ mod tests {
         let kdr2 = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"fn","arguments":"a}"}}]}}]}"#;
         let mut acc: Vec<ToolCall> = Vec::new();
         for line in [kdr1, kdr2] {
-            if let Some(Chunk::Call { index, id, name, arguments }) = parse_event(line) {
+            if let Some(Chunk::Call {
+                index,
+                id,
+                name,
+                arguments,
+            }) = parse_event(line)
+            {
                 let slot = if id.is_some() {
                     // id.is_some() → новый слот (текущее поведение)
-                    acc.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() });
+                    acc.push(ToolCall {
+                        id: String::new(),
+                        name: String::new(),
+                        arguments: String::new(),
+                    });
                     acc.last_mut().unwrap()
                 } else if let Some(i) = index {
-                    while acc.len() <= i { acc.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() }); }
+                    while acc.len() <= i {
+                        acc.push(ToolCall {
+                            id: String::new(),
+                            name: String::new(),
+                            arguments: String::new(),
+                        });
+                    }
                     &mut acc[i]
                 } else {
                     continue;
                 };
-                if let Some(id) = id { slot.id = id; }
-                if let Some(name) = name { slot.name = name; }
-                if let Some(args) = arguments { slot.arguments.push_str(&args); }
+                if let Some(id) = id {
+                    slot.id = id;
+                }
+                if let Some(name) = name {
+                    slot.name = name;
+                }
+                if let Some(args) = arguments {
+                    slot.arguments.push_str(&args);
+                }
             }
         }
         // Текущее поведение: два слота — один от index=0 (пустой), второй от id.
         // Когда это изменится, тест укажет на это.
-        assert_eq!(acc.len(), 2, "id.is_some() заводит новый слот даже если index тот же");
+        assert_eq!(
+            acc.len(),
+            2,
+            "id.is_some() заводит новый слот даже если index тот же"
+        );
         assert_eq!(acc[1].name, "fn");
         assert_eq!(acc[1].arguments, "a}");
     }
@@ -1040,19 +1136,41 @@ mod tests {
         ];
         let mut acc: Vec<ToolCall> = Vec::new();
         for line in frames {
-            if let Some(Chunk::Call { index, id, name, arguments }) = parse_event(line) {
+            if let Some(Chunk::Call {
+                index,
+                id,
+                name,
+                arguments,
+            }) = parse_event(line)
+            {
                 let slot = if id.is_some() {
-                    acc.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() });
+                    acc.push(ToolCall {
+                        id: String::new(),
+                        name: String::new(),
+                        arguments: String::new(),
+                    });
                     acc.last_mut().unwrap()
                 } else if let Some(i) = index {
-                    while acc.len() <= i { acc.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() }); }
+                    while acc.len() <= i {
+                        acc.push(ToolCall {
+                            id: String::new(),
+                            name: String::new(),
+                            arguments: String::new(),
+                        });
+                    }
                     &mut acc[i]
                 } else {
                     acc.last_mut().unwrap()
                 };
-                if let Some(id) = id { slot.id = id; }
-                if let Some(name) = name { slot.name = name; }
-                if let Some(args) = arguments { slot.arguments.push_str(&args); }
+                if let Some(id) = id {
+                    slot.id = id;
+                }
+                if let Some(name) = name {
+                    slot.name = name;
+                }
+                if let Some(args) = arguments {
+                    slot.arguments.push_str(&args);
+                }
             }
         }
         let (calls, dropped) = collect_calls(&acc);
@@ -1071,26 +1189,60 @@ mod tests {
         // index=2 без предыдущих 0 и 1
         let frame = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":2,"id":"c","function":{"name":"fn","arguments":"{}"}}]}}]}"#;
         let mut acc: Vec<ToolCall> = Vec::new();
-        if let Some(Chunk::Call { index, id, name, arguments }) = parse_event(frame) {
+        if let Some(Chunk::Call {
+            index,
+            id,
+            name,
+            arguments,
+        }) = parse_event(frame)
+        {
             let slot = if id.is_some() {
-                acc.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() });
+                acc.push(ToolCall {
+                    id: String::new(),
+                    name: String::new(),
+                    arguments: String::new(),
+                });
                 acc.last_mut().unwrap()
             } else if let Some(i) = index {
-                while acc.len() <= i { acc.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() }); }
+                while acc.len() <= i {
+                    acc.push(ToolCall {
+                        id: String::new(),
+                        name: String::new(),
+                        arguments: String::new(),
+                    });
+                }
                 &mut acc[i]
             } else {
                 acc.last_mut().unwrap()
             };
-            if let Some(id) = id { slot.id = id; }
-            if let Some(name) = name { slot.name = name; }
-            if let Some(args) = arguments { slot.arguments.push_str(&args); }
+            if let Some(id) = id {
+                slot.id = id;
+            }
+            if let Some(name) = name {
+                slot.name = name;
+            }
+            if let Some(args) = arguments {
+                slot.arguments.push_str(&args);
+            }
         }
         // id.is_some() → новый слот (логика id-first), index:2 не создаёт дырки в этом пути
         // Проверим поведение collect_calls с настоящими дырками через Vec прямо:
         let with_gaps = vec![
-            ToolCall { id: String::new(), name: String::new(), arguments: String::new() }, // дырка 0
-            ToolCall { id: String::new(), name: String::new(), arguments: String::new() }, // дырка 1
-            ToolCall { id: "c".into(), name: "fn".into(), arguments: "{}".into() },        // index 2
+            ToolCall {
+                id: String::new(),
+                name: String::new(),
+                arguments: String::new(),
+            }, // дырка 0
+            ToolCall {
+                id: String::new(),
+                name: String::new(),
+                arguments: String::new(),
+            }, // дырка 1
+            ToolCall {
+                id: "c".into(),
+                name: "fn".into(),
+                arguments: "{}".into(),
+            }, // index 2
         ];
         let (calls, dropped) = collect_calls(&with_gaps);
         assert_eq!(dropped, 2, "дырки считаются как dropped");
@@ -1111,7 +1263,10 @@ mod tests {
         assert_eq!(j["role"], "tool");
         assert_eq!(j["tool_call_id"], "c1");
         assert_eq!(j["content"], "ok");
-        assert!(j.get("is_error").is_none(), "is_error не должен уходить на провод");
+        assert!(
+            j.get("is_error").is_none(),
+            "is_error не должен уходить на провод"
+        );
         assert!(j.get("name").is_none(), "name тоже не уходит");
     }
 
@@ -1125,8 +1280,13 @@ mod tests {
         let j = message_json(&m);
         assert_eq!(j["role"], "assistant");
         assert_eq!(j["content"], "ответ");
-        assert!(j["tool_calls"].as_array().map(|a| a.is_empty()).unwrap_or(false),
-            "tool_calls должен быть пустым массивом, не null и не отсутствовать");
+        assert!(
+            j["tool_calls"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false),
+            "tool_calls должен быть пустым массивом, не null и не отсутствовать"
+        );
     }
 
     /// wire_messages с пустым списком сообщений → только System.
@@ -1168,7 +1328,9 @@ mod tests {
     }
 
     fn user(text: &str) -> Msg {
-        Msg::User { content: text.into() }
+        Msg::User {
+            content: text.into(),
+        }
     }
 
     /// Старые Tool-результаты обрезаются до 200 символов при переполнении.
@@ -1177,7 +1339,9 @@ mod tests {
         // Длинный результат инструмента в старом ходе (~120 000 токенов ASCII).
         let big = "x".repeat(420_000);
         let mut msgs = vec![
-            Msg::System { content: "sys".into() },
+            Msg::System {
+                content: "sys".into(),
+            },
             user("вопрос"),
             assistant_with_call("c1"),
             tool("c1", &big),
@@ -1207,7 +1371,9 @@ mod tests {
     fn trim_context_drops_old_turns_but_keeps_first_user() {
         let big = "ы".repeat(50_000); // ~35 000 токенов
         let mut msgs = vec![
-            Msg::System { content: "sys".into() },
+            Msg::System {
+                content: "sys".into(),
+            },
             user("задача"),
             assistant_with_call("c1"),
             tool("c1", &big),
@@ -1221,7 +1387,8 @@ mod tests {
         trim_context(&mut msgs, 50_000);
         // Первый User не выброшен.
         assert!(
-            msgs.iter().any(|m| matches!(m, Msg::User { content, .. } if content == "задача")),
+            msgs.iter()
+                .any(|m| matches!(m, Msg::User { content, .. } if content == "задача")),
             "первый User должен остаться"
         );
         // Размер вписывается в лимит.
@@ -1234,7 +1401,9 @@ mod tests {
     fn trim_context_never_splits_assistant_tool_pair() {
         let big = "z".repeat(5_000);
         let mut msgs = vec![
-            Msg::System { content: "sys".into() },
+            Msg::System {
+                content: "sys".into(),
+            },
             user("q"),
             // Три хода.
             assistant_with_call("a"),
@@ -1252,10 +1421,7 @@ mod tests {
                 let ids: Vec<_> = tool_calls.iter().map(|c| c.id.as_str()).collect();
                 i += 1;
                 for expected_id in &ids {
-                    assert!(
-                        i < msgs.len(),
-                        "ход оборван: нет Tool для Assistant"
-                    );
+                    assert!(i < msgs.len(), "ход оборван: нет Tool для Assistant");
                     match &msgs[i] {
                         Msg::Tool { call_id, .. } => {
                             assert_eq!(call_id.as_str(), *expected_id, "Tool не для этого вызова");

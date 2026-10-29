@@ -27,7 +27,11 @@ pub fn build_system() -> String {
          a mutating script (`tll_on_data` calling `tll_callback`) applied to bodies on \
          the fly — use `set_lua_transform` only when the human asks for view-time \
          changes, and `get_lua_transform` before overwriting existing code.\n\
-         You may prepare field edits. Before sending `edit_messages`, verify the \
+         You may prepare field edits and change the stream itself: delete \
+         messages (`remove` shifts later seqs, `clear` leaves a gap), insert a copy \
+         before a seq, change a message type. Seqs in all tools are file seqs; \
+         renumbering happens only on commit. To keep the last seq, remove as many \
+         messages as you insert. Before sending `edit_messages`, verify the \
          current values of the fields you are changing. For mass changes, find the \
          messages by a criterion first, then send the whole batch in ONE \
          `edit_messages` call: the human sees one summary of the batch and confirms \

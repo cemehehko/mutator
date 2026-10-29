@@ -28,7 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::decode::{self, Node, Value};
-use crate::io::{Context, LuaMode, Msg, Open, Reader, Transformer};
+use crate::io::{Context, LuaMode, Msg, Reader, Transformer};
 use crate::lua::Filter;
 use crate::range::{Border, Range};
 use crate::scheme::Scheme;
@@ -53,21 +53,23 @@ pub struct Dump {
     pub backend: crate::io::Backend,
 }
 
-/// Напечатать сообщения в `out`.
+/// Напечатать сообщения в `out`. Спека `d.path` может быть склейкой — части
+/// читаются цепочкой по порядку.
 pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
     let ctx = Context::new();
-    let info = Reader::open(&ctx, &Open::file(&d.path))?.info();
+    let file = crate::data::File::open_spec(&d.path.to_string_lossy())?;
+    let info = file.info.clone();
     let mut d = d.clone();
     d.backend = info.backend;
     let d = &d;
     let mut skip = 0u64;
     let mut count: Option<u64> = None;
     let mut last: Option<i64> = None;
-    let mut open = Open::file(&d.path);
+    let mut begin: Option<i64> = None;
     match d.range.begin {
-        Some(Border::Seq(s)) => open.seq = Some(s),
+        Some(Border::Seq(s)) => begin = Some(s),
         Some(Border::Count(n)) => skip = n,
-        Some(Border::FromLast(n)) => open.seq = info.seq_last.map(|l| l - n as i64),
+        Some(Border::FromLast(n)) => begin = info.seq_last.map(|l| l - n as i64),
         None => {}
     }
     if d.range.single {
@@ -83,116 +85,123 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
     }
     let mut store = crate::edit::Store::new();
     let patch = store.write(&d.edits)?;
-    let mut fallback = false;
-    if let Some(code) = &d.transform {
-        // Lua-слой канала — мутатор; фильтр едет пост-эвалом.
-        open.lua = Some(code.clone());
-        open.lua_mode = Some(LuaMode::Transform);
+    // Lua-слой канала: transform — мутатор (фильтр едет пост-эвалом), иначе код
+    // фильтра прямо в канале, как у tll-read.
+    let chan_lua: Option<(String, LuaMode)> = if let Some(code) = &d.transform {
+        Some((code.clone(), LuaMode::Transform))
     } else {
-        // Как у tll-read: код фильтра прямо в канале.
-        open.lua = d.filter.code_for(d.backend);
-    }
-    open = open.patch(patch);
-    let mut r = match Reader::open(&ctx, &open) {
+        d.filter.code_for(d.backend).map(|c| (c, LuaMode::Filter))
+    };
+    let srcs = file.raw_sources();
+    let start = begin
+        .and_then(|s| crate::data::fetch::Src::part_of(&srcs, s))
+        .unwrap_or(0);
+    let open_part = |s: &crate::data::fetch::Src,
+                     seq: Option<i64>,
+                     lua: Option<&(String, LuaMode)>| {
+        let mut o = s.open.clone();
+        o.seq = seq;
+        if let Some((c, m)) = lua {
+            o.lua = Some(c.clone());
+            o.lua_mode = Some(*m);
+        }
+        o.patch(patch.clone())
+    };
+    // Первая часть: её открытие решает, жив ли transform (`fallback`).
+    let mut fallback = false;
+    let mut r = match Reader::open(&ctx, &open_part(&srcs[start], begin, chan_lua.as_ref())) {
         Ok(r) => r,
         Err(e) if d.transform.is_some() => {
             // Мутатор не открылся (битый код, нет tll-lua) — читать файл с
             // правками, как есть, как делает вид при откате.
             eprintln!("mutator: transform: {e}");
             fallback = true;
-            open.lua = None;
-            open.lua_mode = None;
-            Reader::open(&ctx, &open)?
+            Reader::open(&ctx, &open_part(&srcs[start], begin, None))?
         }
         Err(e) => return Err(e),
     };
-    let scheme = r.scheme();
+    let scheme = Some(file.scheme.as_ref());
 
     // Диф мутатора: те же seq читаются сырыми и прогоняются второй читкой
     // (`agr:transform-shadow`).
-    let mut sh: Option<(crate::data::File, Transformer)> = match d.transform.as_ref() {
-        Some(code) if !fallback => match crate::data::File::open(&d.path) {
-            Ok(f) => {
-                let url = f.scheme_url.clone().unwrap_or_default();
-                match Transformer::new(&ctx, f.info.backend, code, &url) {
-                    Ok(tx) => Some((f, tx)),
-                    Err(e) => {
-                        eprintln!("mutator: transform: {e}");
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("mutator: transform: {e}");
-                None
-            }
-        },
-        _ => None,
-    };
+    let transforming = d.transform.is_some() && !fallback;
+    let mut sh: Option<(crate::data::File, Transformer)> = None;
+    if transforming {
+        let code = d.transform.as_ref().unwrap();
+        match Transformer::new(&ctx, info.backend, code, file.scheme_url.as_deref().unwrap_or_default()) {
+            Ok(tx) => sh = Some((file.clone(), tx)),
+            Err(e) => eprintln!("mutator: transform: {e}"),
+        }
+    }
 
     // Пост-эвал фильтра при transform (`agr:filter-post-eval`): типы — в Rust,
     // выражение — парой `tll_filter` над прогоным телом.
-    let transforming = d.transform.is_some() && !fallback;
     let wanted = if transforming {
-        wanted_msgids(scheme.as_ref(), &d.filter.messages)
+        wanted_msgids(scheme, &d.filter.messages)
     } else {
         None
     };
     let mut eval = if transforming && !d.filter.expr.trim().is_empty() {
-        sh.as_ref()
-            .and_then(|(f, _)| f.scheme_url.clone())
-            .and_then(|url| d.filter.expr_code_for(info.backend).map(|code| (code, url)))
-            .and_then(
-                |(code, url)| match Transformer::filter(&ctx, info.backend, &code, &url) {
-                    Ok(tf) => Some(tf),
-                    Err(e) => {
-                        eprintln!("mutator: filter: {e}");
-                        None
-                    }
-                },
-            )
+        file.scheme_url
+            .clone()
+            .zip(d.filter.expr_code_for(info.backend))
+            .and_then(|(url, code)| match Transformer::filter(&ctx, info.backend, &code, &url) {
+                Ok(tf) => Some(tf),
+                Err(e) => {
+                    eprintln!("mutator: filter: {e}");
+                    None
+                }
+            })
     } else {
         None
     };
 
     let mut batch: Vec<Msg> = Vec::new();
-    for m in r.by_ref() {
-        if skip > 0 {
-            skip -= 1;
-            continue;
-        }
-        if let Some(w) = &wanted {
-            if !w.contains(&m.msgid) {
+    let mut k = 0usize;
+    'parts: loop {
+        for m in r.by_ref() {
+            if skip > 0 {
+                skip -= 1;
                 continue;
             }
-        }
-        if let Some(tf) = &mut eval {
-            if tf.transform(&m)?.is_none() {
-                continue;
+            if let Some(w) = &wanted {
+                if !w.contains(&m.msgid) {
+                    continue;
+                }
+            }
+            if let Some(tf) = &mut eval {
+                if tf.transform(&m)?.is_none() {
+                    continue;
+                }
+            }
+            if count == Some(0) || last.is_some_and(|l| m.seq > l) {
+                break 'parts;
+            }
+            if let Some(c) = &mut count {
+                *c -= 1;
+            }
+            batch.push(m);
+            if batch.len() >= BATCH {
+                print_batch(
+                    d,
+                    out,
+                    &ctx,
+                    scheme,
+                    sh.as_mut(),
+                    std::mem::take(&mut batch),
+                )?;
             }
         }
-        if count == Some(0) || last.is_some_and(|l| m.seq > l) {
-            break;
+        if let Some(e) = r.error() {
+            return Err(e);
         }
-        if let Some(c) = &mut count {
-            *c -= 1;
-        }
-        batch.push(m);
-        if batch.len() >= BATCH {
-            print_batch(
-                d,
-                out,
-                &ctx,
-                scheme.as_ref(),
-                sh.as_mut(),
-                std::mem::take(&mut batch),
-            )?;
-        }
+        // Не набралось в этой части — продолжить со следующей, с её начала.
+        k += 1;
+        let Some(s) = srcs.get(start + k) else { break };
+        let lua = if fallback { None } else { chan_lua.as_ref() };
+        r = Reader::open(&ctx, &open_part(s, None, lua))?;
     }
-    print_batch(d, out, &ctx, scheme.as_ref(), sh.as_mut(), batch)?;
-    if let Some(e) = r.error() {
-        return Err(e);
-    }
+    print_batch(d, out, &ctx, scheme, sh.as_mut(), batch)?;
     Ok(())
 }
 
@@ -227,9 +236,8 @@ fn print_batch(
         // Сырые сообщения пачки — по её seq: поток dump идёт через мутатор
         // построчно, исходного seq у него нет (смена seq в dump не ловится).
         let seqs: Vec<i64> = batch.iter().map(|m| m.seq).collect();
-        let shadowed =
-            crate::data::fetch::by_seqs(ctx, &Open::file(&f.path).backend(f.info.backend), &seqs)
-                .and_then(|raw| crate::data::shadow(f, tx, &raw, &batch));
+        let shadowed = crate::data::fetch::by_seqs(ctx, &f.raw_sources(), &seqs)
+            .and_then(|raw| crate::data::shadow(f, tx, &raw, &batch));
         match shadowed {
             Ok(m) => mutations = m,
             Err(e) => eprintln!("mutator: transform: {e}"),
@@ -292,19 +300,32 @@ fn print_batch(
 /// (`agr:dump-stat`).
 pub fn stat(path: &Path, out: &mut dyn Write) -> Result<(), String> {
     let ctx = Context::new();
-    let r = Reader::open(&ctx, &Open::file(path).meta())?;
-    let info = r.info();
-    let scheme = r.scheme();
+    let file = crate::data::File::open_spec(&path.to_string_lossy())?;
+    let info = file.info.clone();
+    let scheme = Some(file.scheme.as_ref());
     let s = |v: Option<i64>| v.map(|x| x.to_string()).unwrap_or_default();
     let mut total = 0usize;
     let mut hist: HashMap<i32, usize> = HashMap::new();
-    for m in r {
-        *hist.entry(m.msgid).or_default() += 1;
-        total += 1;
+    for part in file.raw_sources() {
+        let mut r = Reader::open(&ctx, &part.open.clone().meta())?;
+        for m in r.by_ref() {
+            *hist.entry(m.msgid).or_default() += 1;
+            total += 1;
+        }
+        if let Some(e) = r.error() {
+            return Err(e);
+        }
     }
-    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let size: u64 = file
+        .parts
+        .iter()
+        .map(|p| std::fs::metadata(&p.path).map(|m| m.len()).unwrap_or(0))
+        .sum();
     let w = |e: std::io::Error| e.to_string();
     writeln!(out, "file: {}", path.display()).map_err(w)?;
+    if file.parts.len() > 1 {
+        writeln!(out, "parts: {}", file.parts.len()).map_err(w)?;
+    }
     writeln!(out, "size: {size} bytes").map_err(w)?;
     writeln!(out, "First seq: {}", s(info.seq_begin)).map_err(w)?;
     writeln!(out, "Last seq: {}", s(info.seq_last)).map_err(w)?;

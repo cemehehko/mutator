@@ -1,6 +1,6 @@
 [package]
 name = "tll-mutator"
-version = "0.0.10"
+version = "0.0.11"
 edition = "2021"
 description = "Просмотр датников TLL: таблица сообщений, фильтр, поиск — в окне и в терминале"
 
@@ -88,8 +88,18 @@ path = "tests/desk.rs"
 required-features = ["tll"]
 
 [[test]]
+name = "glue"
+path = "tests/glue.rs"
+required-features = ["tll"]
+
+[[test]]
 name = "golden"
 path = "tests/golden.rs"
+required-features = ["tll"]
+
+[[test]]
+name = "stream"
+path = "tests/stream.rs"
 required-features = ["tll"]
 
 [[test]]

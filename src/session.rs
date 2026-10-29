@@ -53,6 +53,8 @@ pub struct Session {
     pub lua_transform_enabled: Option<bool>,
     /// Незафиксированные правки (`agr:edits-in-session`).
     pub edits: Vec<crate::edit::Saved>,
+    /// Незафиксированные удаления, смены типа и вставки (`agr:stream-ops`).
+    pub stream: Vec<crate::edit::SavedOp>,
 }
 
 /// Каталог настроек: `$XDG_CONFIG_HOME/mutator` или `~/.config/mutator`.

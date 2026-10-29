@@ -207,6 +207,20 @@ pub enum Ev {
         dialog: String,
         text: String,
     },
+    /// Перед исполнением инструмента: вид показывает, что работает он, а не
+    /// модель (`agr:agent-progress`).
+    Tool {
+        dialog: String,
+        name: String,
+    },
+    /// Результат инструмента ушёл модели: имя, строк в нём, ошибка ли
+    /// (`agr:agent-progress`).
+    ToolDone {
+        dialog: String,
+        name: String,
+        lines: usize,
+        is_error: bool,
+    },
     /// Запрос повторяется после ошибки соединения или 429 (`agr:agent-retry`).
     Retry {
         dialog: String,
@@ -262,9 +276,9 @@ pub struct ToolCtx {
 }
 
 impl ToolCtx {
-    /// Что открывать для чтения: файл с наложенными правками, если они есть.
-    fn src(&self) -> crate::io::Open {
-        self.file.source()
+    /// Что открывать для чтения: части с наложенными правками, если они есть.
+    fn src(&self) -> Vec<crate::data::fetch::Src> {
+        self.file.sources()
     }
 
     /// Записать правки в yaml и перечитать через него: и вид, и агент видят
@@ -375,7 +389,7 @@ pub fn start(
 ) -> (CmdTx, std::sync::mpsc::Receiver<Ev>) {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (ev_tx, ev_rx) = std::sync::mpsc::sync_channel(512);
-    let owner = store::owner_of(&file.path);
+    let owner = store::owner_of(std::path::Path::new(&file.name));
     std::thread::Builder::new()
         .name("agent".into())
         .spawn(move || {
@@ -859,6 +873,30 @@ fn resume(
         );
         return end_of_turn(state, ev_tx, &turn.dialog);
     }
+    if reply.tool_calls.is_empty() && turn.partial.is_empty() {
+        // Ни текста, ни вызовов: молчаливый конец хода не отличить от
+        // зависания (`agr:agent-empty`).
+        send(
+            ev_tx,
+            Ev::Error {
+                dialog: turn.dialog.clone(),
+                text: format!(
+                    "модель не ответила (finish: {}) — попробуйте другую модель",
+                    reply.finish.as_deref().unwrap_or("—")
+                ),
+            },
+        );
+        return end_of_turn(state, ev_tx, &turn.dialog);
+    }
+    if reply.finish.as_deref() == Some("content_filter") {
+        send(
+            ev_tx,
+            Ev::Notice {
+                dialog: turn.dialog.clone(),
+                text: "ответ оборван фильтром модели".into(),
+            },
+        );
+    }
     if reply.finish.as_deref() == Some("length") {
         send(
             ev_tx,
@@ -905,6 +943,17 @@ fn run_queue(state: &mut State, ctx: &mut ToolCtx, ev_tx: &Sender<Ev>, mut turn:
         if let Some(ev) = trace::trace(ctx, format!("→ {} {}", call.name, call.arguments)) {
             send_lossy(ev_tx, ev);
         }
+        // Фаза хода для вида: работает инструмент (`agr:agent-progress`).
+        // Пачка ждёт человека — о ней скажет запрос подтверждения.
+        if !needs_confirm(&call.name) {
+            send_lossy(
+                ev_tx,
+                Ev::Tool {
+                    dialog: turn.dialog.clone(),
+                    name: call.name.clone(),
+                },
+            );
+        }
         if stopped {
             store_tool_stub(
                 state,
@@ -927,7 +976,7 @@ fn run_queue(state: &mut State, ctx: &mut ToolCtx, ev_tx: &Sender<Ev>, mut turn:
                         ev_tx,
                         Ev::ConfirmRequest {
                             tool: call.name.clone(),
-                            summary: batch.edits.summary(),
+                            summary: batch.summary(),
                         },
                     );
                     turn.queue.push_front(call);
@@ -1163,6 +1212,25 @@ fn store_message(state: &mut State, ev_tx: &Sender<Ev>, dialog_id: &str, msg: Ms
     if let Some(d) = state.store.by_id_mut(dialog_id) {
         d.messages.push(msg.clone());
     }
+    // Ответ модели инструментом — итогом в строку состояния
+    // (`agr:agent-progress`); в ленту он не идёт.
+    if let Msg::Tool {
+        name,
+        content,
+        is_error,
+        ..
+    } = &msg
+    {
+        send_lossy(
+            ev_tx,
+            Ev::ToolDone {
+                dialog: dialog_id.to_string(),
+                name: name.clone(),
+                lines: content.lines().count().max(1),
+                is_error: *is_error,
+            },
+        );
+    }
     if let Err(e) = store::append_message(&state.owner, &state.store, dialog_id, &msg) {
         send(
             ev_tx,
@@ -1283,6 +1351,8 @@ mod tests {
     use super::*;
 
     fn state() -> State {
+        // Ход пишет дневник: только в песочницу, не в настоящий конфиг.
+        store::sandbox();
         State {
             owner: "f.dat".into(),
             store: Store::default(),
@@ -1339,7 +1409,9 @@ mod tests {
                 .any(|(k, v)| k == "сообщений" && v == "1"),
             "{summary:?}"
         );
-        assert!(summary.lines[0].contains("1000 → 777"), "{summary:?}");
+        // Первой строкой — прогноз последнего seq (`agr:seq-forecast`).
+        assert!(summary.lines[0].starts_with("последний seq"), "{summary:?}");
+        assert!(summary.lines[1].contains("1000 → 777"), "{summary:?}");
     }
 
     /// Собрать пачку не удалось: модель получает отказ сама, человека не зовут.
@@ -1610,6 +1682,77 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Ev::Delta { text, .. } if text == "начало ")),
             "куски дошли до вида: {deltas:?}"
+        );
+    }
+
+    /// `agr:agent-empty`
+    /// Пустой ответ модели — ошибка с причиной, а не молчаливый конец хода.
+    #[test]
+    fn empty_reply_is_an_error_with_finish_reason() {
+        let mut s = state();
+        let id = store::new_dialog(&mut s.store);
+        let mut c = tools::tests_ctx();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let turn = Turn {
+            dialog: id.clone(),
+            partial: String::new(),
+            queue: VecDeque::new(),
+        };
+        let reply = Reply {
+            finish: Some("content_filter".into()),
+            ..Default::default()
+        };
+        let phase = resume(&mut s, &mut c, &tx, turn, Ok(reply));
+        assert!(matches!(phase, Phase::Idle));
+        let evs: Vec<_> = rx.try_iter().collect();
+        assert!(
+            evs.iter().any(|e| matches!(e, Ev::Error { text, .. }
+                if text.contains("не ответила") && text.contains("content_filter"))),
+            "{evs:?}"
+        );
+    }
+
+    /// `agr:agent-progress`
+    /// Перед инструментом вид узнаёт его имя.
+    #[tokio::test]
+    async fn tool_phase_is_announced_before_execution() {
+        let mut s = state();
+        let id = store::new_dialog(&mut s.store);
+        let mut c = tools::tests_ctx();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let turn = Turn {
+            dialog: id.clone(),
+            partial: String::new(),
+            queue: vec![call("file_overview")].into(),
+        };
+        let _ = run_queue(&mut s, &mut c, &tx, turn);
+        let evs: Vec<_> = rx.try_iter().collect();
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, Ev::Tool { name, .. } if name == "file_overview")),
+            "{evs:?}"
+        );
+    }
+
+    /// `agr:agent-progress`
+    /// Результат инструмента виден виду итогом: имя и число строк.
+    #[tokio::test]
+    async fn tool_result_is_announced_with_line_count() {
+        let mut s = state();
+        let id = store::new_dialog(&mut s.store);
+        let mut c = tools::tests_ctx();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let turn = Turn {
+            dialog: id.clone(),
+            partial: String::new(),
+            queue: vec![call("file_overview")].into(),
+        };
+        let _ = run_queue(&mut s, &mut c, &tx, turn);
+        let evs: Vec<_> = rx.try_iter().collect();
+        assert!(
+            evs.iter().any(|e| matches!(e, Ev::ToolDone { name, lines, is_error: false, .. }
+                if name == "file_overview" && *lines > 1)),
+            "{evs:?}"
         );
     }
 

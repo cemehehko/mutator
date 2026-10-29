@@ -16,7 +16,15 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk) {
     let running = c.running;
     egui::Modal::new(egui::Id::new("commit")).show(ui.ctx(), |ui| {
         ui.set_width((ui.ctx().content_rect().width() * 0.8).min(1200.0));
-        ui.heading(format!("Зафиксировать правки — {}", d.file.path.display()));
+        ui.heading(format!("Зафиксировать правки — {}", d.file.name));
+        // Первая строка — прогноз последнего seq или ошибка записи
+        // (`agr:seq-forecast`, `agr:commit-seq-check`).
+        let head_fg = match (&c.error, &c.forecast) {
+            (Some(_), _) => ERROR,
+            (None, Some(f)) if f.changes() => EDITED,
+            _ => TEXT,
+        };
+        ui.label(egui::RichText::new(c.headline()).strong().color(head_fg));
         ui.separator();
         let h = (ui.ctx().content_rect().height() * 0.55).max(200.0);
         ui.columns(2, |cols| {
@@ -77,9 +85,7 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk) {
                 start |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             });
         });
-        if let Some(e) = &c.error {
-            ui.colored_label(ERROR, e);
-        }
+
         if let Some(p) = running {
             ui.add(egui::ProgressBar::new(p).text("пишу через tll-patch…"));
         }

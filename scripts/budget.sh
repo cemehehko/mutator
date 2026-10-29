@@ -7,11 +7,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-budgets="SCENARIOS.md 20
-MANUAL.md 30
-REQUIREMENTS.md 105
-README.md 70
-ARCHITECTURE.md 280
+budgets="SCENARIOS.md 28
+MANUAL.md 38
+REQUIREMENTS.md 150
+README.md 90
+ARCHITECTURE.md 390
 AGENTS.md 70"
 
 fail=0

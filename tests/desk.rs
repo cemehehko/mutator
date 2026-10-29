@@ -207,9 +207,104 @@ fn columns_show_fields_or_nothing() {
     let p = d.prompt.as_ref().unwrap();
     assert_eq!(p.kind, PromptKind::Columns);
     typed(&mut d, "u64");
+    key(&mut d, Key::Char(' '));
     key(&mut d, Key::Enter);
-    key(&mut d, Key::Esc);
     assert_eq!(d.columns, ["u64"]);
+}
+
+/// `agr:size-column` — колонка `#data` показывает размер тела в байтах:
+/// включается пикером `c` как обычная колонка, в пресет по умолчанию не входит,
+/// значение — длина тела, прижато вправо.
+#[test]
+fn data_size_column_shows_message_size() {
+    use tui_patch::ui::cols::{self, ColKind};
+    let mut d = open("lz4", 10);
+    assert!(
+        !d.columns.iter().any(|c| c == tui_patch::columns::DATA_LEN),
+        "в пресет по умолчанию не входит"
+    );
+    key(&mut d, Key::Char('c'));
+    typed(&mut d, tui_patch::columns::DATA_LEN);
+    key(&mut d, Key::Char(' '));
+    key(&mut d, Key::Enter);
+    assert!(d.columns.iter().any(|c| c == tui_patch::columns::DATA_LEN));
+
+    let row = d.selected().unwrap();
+    assert_eq!(
+        cols::cell(row, ColKind::DataLen),
+        row.data.len().to_string(),
+        "значение — длина тела"
+    );
+    let (layout, _) = cols::layout(&d, 500);
+    let col = layout
+        .iter()
+        .find(|c| c.kind == ColKind::DataLen)
+        .expect("колонка #data в раскладке");
+    assert_eq!(col.title, "#data");
+    assert!(col.right, "размер прижат вправо");
+}
+
+/// `agr:size-column`, `agr:picker-keys` — клавиши пикера колонок: End — конец
+/// списка полей, Home — начало, Enter только закрывает окно (видимость
+/// переключает пробел).
+#[test]
+fn columns_picker_end_home_and_enter_close() {
+    let mut d = open("lz4", 10);
+    key(&mut d, Key::Char('c'));
+    assert_eq!(d.prompt.as_ref().unwrap().kind, PromptKind::Columns);
+
+    let n = d.prompt.as_ref().unwrap().visible().len();
+    assert!(n > 1, "полей в пикере больше одного");
+    key(&mut d, Key::End);
+    assert_eq!(d.prompt.as_ref().unwrap().sel, n - 1, "End — конец списка");
+    key(&mut d, Key::Home);
+    assert_eq!(d.prompt.as_ref().unwrap().sel, 0, "Home — начало списка");
+
+    let before = d.columns.clone();
+    key(&mut d, Key::Enter);
+    assert!(d.prompt.is_none(), "Enter закрывает пикер");
+    assert_eq!(d.columns, before, "Enter ничего не переключает");
+
+    key(&mut d, Key::Char('c'));
+    key(&mut d, Key::End);
+    key(&mut d, Key::Char(' '));
+    key(&mut d, Key::Enter);
+    assert_eq!(
+        d.columns.last().map(String::as_str),
+        Some(tui_patch::columns::DATA_LEN),
+        "пробел включил #data у конца списка"
+    );
+}
+
+/// `agr:picker-keys` — окно типов: пробел переключает отметку и не закрывает
+/// окно, Enter закрывает и применяет отмеченное — как Esc; Home/End — края.
+#[test]
+fn types_picker_enter_closes_and_applies() {
+    let mut d = open("lz4", 10);
+    key(&mut d, Key::Char('t'));
+    assert_eq!(d.prompt.as_ref().unwrap().kind, PromptKind::Types);
+
+    let n = d.prompt.as_ref().unwrap().visible().len();
+    assert!(n > 1, "типов в списке больше одного");
+    key(&mut d, Key::End);
+    assert_eq!(d.prompt.as_ref().unwrap().sel, n - 1, "End — конец списка");
+    key(&mut d, Key::Home);
+    assert_eq!(d.prompt.as_ref().unwrap().sel, 0, "Home — начало списка");
+
+    let first = d.prompt.as_ref().unwrap().items[0].label.clone();
+    key(&mut d, Key::Char(' '));
+    assert!(d.prompt.is_some(), "пробел не закрывает окно");
+    assert!(
+        d.prompt.as_ref().unwrap().items[0].on,
+        "пробел переключил отметку"
+    );
+    key(&mut d, Key::Enter);
+    assert!(d.prompt.is_none(), "Enter закрывает окно типов");
+    assert_eq!(
+        d.filter.messages,
+        vec![first],
+        "Enter применил отмеченный тип"
+    );
 }
 
 /// Фильтр и поиск: через строку ввода, внутри фильтра, в обе стороны.

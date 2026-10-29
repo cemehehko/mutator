@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use crate::data::File;
 use crate::desk::Desk;
 use crate::dump::{self, Dump, Painter};
-use crate::io::{self, Context, Open, Reader};
+use crate::io;
 use crate::lua::Filter;
 use crate::range::Range;
 use crate::ui;
@@ -22,7 +22,10 @@ const USAGE: &str = "\
 mutator [FILE] [параметры] — просмотр датника
 
   FILE                  без файла окно открывает последний или спрашивает файл;
-                        для --tui, --dump и --stat файл обязателен
+                        для --tui, --dump и --stat файл обязателен;
+                        несколько файлов одним видом: a.dat+b.dat — склейка в
+                        указанном порядке, r.current.dat-3 — файл и ещё 3 более
+                        старых той же ротации (номера в именах, current — последний)
 
   --gui                 окно, не отсоединяясь от терминала (как --foreground)
   --tui                 терминал вместо окна (в сборке без GUI — всегда терминал)
@@ -121,9 +124,7 @@ fn check(a: &Args) -> Result<(), String> {
         return Ok(());
     }
     if !cfg!(feature = "gui") {
-        return Err(
-            "--gui: сборка без GUI, окна нет (терминал — по умолчанию, --dump — печать)".into(),
-        );
+        return Err("--gui: сборка без GUI, окна нет (терминал — по умолчанию, --dump — печать)".into());
     }
     match (a.tui, a.dump, a.stat, a.dump_seq) {
         (false, false, false, false) => Ok(()),
@@ -163,7 +164,10 @@ pub fn main() -> ExitCode {
         }
     };
     // Окно из терминала уходит в фон: консоль не нужна (`agr:gui-detach`).
-    if file.as_ref().is_none_or(|f| f.exists()) && detach(&a) {
+    // Спека жива, пока разворачивается — существование проверяет разбор.
+    if file.as_ref().is_none_or(|f| crate::spec::expand(&f.to_string_lossy()).is_ok())
+        && detach(&a)
+    {
         return ExitCode::SUCCESS;
     }
     if let Some(b) = a.backend {
@@ -238,7 +242,7 @@ fn run(a: Args, file: Option<PathBuf>) -> Result<(), String> {
         }
     };
     if a.dump_seq {
-        let info = Reader::open(&Context::new(), &Open::file(&file))?.info();
+        let info = File::open_spec(&file.to_string_lossy())?.info;
         let s = |v: Option<i64>| v.map(|x| x.to_string()).unwrap_or_default();
         println!(
             "First seq: {}\nLast seq: {}",
@@ -260,7 +264,7 @@ fn run(a: Args, file: Option<PathBuf>) -> Result<(), String> {
         // Дамп показывает то же, что вид: правки и transform сессии применяются.
         let edits = session
             .as_ref()
-            .map(|s| crate::edit::Edits::from_saved(&s.edits))
+            .map(|s| crate::edit::Edits::from_session(&s.edits, &s.stream))
             .unwrap_or_default();
         let transform = session.as_ref().and_then(|s| {
             let on = s.lua_transform_enabled.unwrap_or(true);
@@ -305,7 +309,7 @@ fn run(a: Args, file: Option<PathBuf>) -> Result<(), String> {
             dump::run(&d, &mut lock)
         };
     }
-    let file = File::open(&file)?;
+    let file = File::open_spec(&file.to_string_lossy())?;
     let filter = a.filter.clone();
     let start = a.range.clone();
     let setup = move |d: &mut Desk| {
@@ -348,16 +352,10 @@ mod tests {
     /// остаться, снимок для проверок, терминала на вводе нет (`.app`, скрипт).
     #[test]
     fn it_stays_attached_when_detaching_makes_no_sense() {
-        assert!(
-            !should_detach(false, false, false, true),
-            "терминал и печать"
-        );
+        assert!(!should_detach(false, false, false, true), "терминал и печать");
         assert!(!should_detach(true, true, false, true), "--foreground");
         assert!(!should_detach(true, false, true, true), "снимок окна");
-        assert!(
-            !should_detach(true, false, false, false),
-            "запуск не из терминала"
-        );
+        assert!(!should_detach(true, false, false, false), "запуск не из терминала");
     }
 
     /// `agr:gui-detach` — `--gui` оставляет окно в терминале, как `--foreground`.

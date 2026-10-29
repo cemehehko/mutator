@@ -18,7 +18,7 @@
 //! Наружу: [`Settings`], [`Dialog`], [`Msg`], [`CallReq`],
 //! [`Store`], [`UNTITLED`], [`owner_of`], [`load_settings`],
 //! [`save_settings`], [`load_store`], [`save_store`], [`append_message`],
-//! [`new_dialog`].
+//! [`new_dialog`]; в тестах — `sandbox`: каталог настроек во временном.
 
 use std::path::{Path, PathBuf};
 
@@ -415,32 +415,35 @@ fn next_id() -> String {
     format!("{nanos:x}-{:x}", N.fetch_add(1, Ordering::Relaxed))
 }
 
+/// Тесты пишут во временный каталог, а не в `~/.config/mutator/agent`,
+/// чтобы не затирать настоящие настройки и диалоги пользователя. Ставится
+/// один раз до первого обращения к диску: смена каталога посреди теста
+/// развела бы запись и чтение по разным местам.
+#[cfg(test)]
+pub(crate) fn sandbox() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("tui-patch-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::env::set_var("MUTATOR_CONFIG_DIR", &dir);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Once;
 
     /// Владелец тестов: фиксированное имя, чтобы тесты не спорили за файлы.
     fn owner() -> String {
         "тест-дневник".into()
     }
 
-    /// Тесты одного каталога настроек идут по очереди: файл и переменная
-    /// окружения общие.
+    /// Тесты одного каталога настроек идут по очереди: файл общий. Каталог —
+    /// песочница, поставленная до замка.
     fn disk() -> std::sync::MutexGuard<'static, ()> {
+        sandbox();
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Тесты пишут во временный каталог, а не в `~/.config/tui-patch/agent`,
-    /// чтобы не затирать настоящие настройки пользователя.
-    fn sandbox() {
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
-            let dir = std::env::temp_dir().join(format!("tui-patch-test-{}", std::process::id()));
-            std::fs::remove_dir_all(&dir).ok();
-            std::env::set_var("MUTATOR_CONFIG_DIR", &dir);
-        });
     }
 
     /// Дневник с прошлого прогона не должен путать счётчики.

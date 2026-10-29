@@ -8,7 +8,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, Once};
 
-use egui;
 use tui_patch::recent::Recent;
 use tui_patch::ui::Shell;
 use tui_patch::{io, session};
@@ -107,7 +106,9 @@ impl Win {
 
     /// Путь открытого файла.
     fn open_path(&self) -> Option<PathBuf> {
-        self.shell.app().map(|a| a.desk.file.path.clone())
+        self.shell
+            .app()
+            .map(|a| PathBuf::from(a.desk.file.name.clone()))
     }
 }
 

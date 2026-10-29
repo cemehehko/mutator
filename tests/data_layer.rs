@@ -41,6 +41,11 @@ fn seqs(v: &[Msg]) -> Vec<i64> {
     v.iter().map(|m| m.seq).collect()
 }
 
+/// Шаблон чтения одного файла — как его собирает `File::raw_sources`.
+fn srcs(path: &Path) -> Vec<fetch::Src> {
+    File::open(path).unwrap().raw_sources()
+}
+
 fn worker(path: &Path) -> (Worker, Arc<tui_patch::data::Index>) {
     let w = Worker::start(File::open(path).unwrap(), Arc::new(|| {}));
     loop {
@@ -83,15 +88,16 @@ fn index_and_windows_match_full_read() {
         assert_eq!(idx.total, msgs.len(), "{name}");
         assert_eq!(idx.hist.values().sum::<usize>(), msgs.len());
         let ctx = Context::new();
+        let s = srcs(&path);
         for row in [0, 1, 37, msgs.len() / 2, msgs.len() - 1] {
-            let got = fetch::from_row(&ctx, &Open::file(&path), &idx, row, 5).unwrap();
+            let got = fetch::from_row(&ctx, &s, &idx, row, 5).unwrap();
             assert_eq!(
                 seqs(&got),
                 seqs(&msgs[row..(row + 5).min(msgs.len())]),
                 "{name} row {row}"
             );
             assert_eq!(
-                fetch::row_of(&ctx, &Open::file(&path), &idx, msgs[row].seq).unwrap(),
+                fetch::row_of(&ctx, &s, &idx, msgs[row].seq).unwrap(),
                 row
             );
         }
@@ -143,7 +149,7 @@ fn index_and_windows_match_full_read() {
         assert!(at_start);
         // Назад от начала — пусто и упор.
         assert!(
-            fetch::before_seq(&ctx, &Open::file(&path), msgs[0].seq, 5, msgs[0].seq)
+            fetch::before_seq(&ctx, &s, msgs[0].seq, 5, msgs[0].seq)
                 .unwrap()
                 .is_empty()
         );
@@ -165,7 +171,7 @@ fn by_seqs_returns_exactly_requested() {
     let mut ask = want.clone();
     ask.insert(1, want[1] - 1); // такого seq нет: шаг 10
     ask.sort();
-    let got = fetch::by_seqs(&ctx, &Open::file(&path), &ask).unwrap();
+    let got = fetch::by_seqs(&ctx, &srcs(&path), &ask).unwrap();
     assert_eq!(seqs(&got), want);
 }
 

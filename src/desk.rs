@@ -22,6 +22,15 @@
 //! `u` снимает правку поля, `w` — диалог фиксации [`Commit`]; записанный файл
 //! открывается вместо прежнего ([`Desk::reopen`]).
 //!
+//! Состав потока (`agr:stream-ops`): `d`/`Del` — удалить строку или диапазон от
+//! метки `v` (со сдвигом seq или дырой), `o`/`Ins` — вставить перед строкой её
+//! копию, `T` — сменить тип (от метки `v` — у диапазона одним телом, в фильтре —
+//! у найденного), `u` в таблице — снять. Вид остаётся во входных
+//! seq (`agr:view-input-seq`): удалённое — строкой с пометкой, вставка —
+//! строкой [`RowView::ins`] перед своим seq, рядом — seq после записи.
+//! Диалог фиксации первой строкой даёт прогноз последнего seq
+//! ([`Commit::headline`], `agr:seq-forecast`).
+//!
 //! Наружу: [`Desk`], [`Key`], [`RowView`], [`Detail`], [`Prompt`], [`PromptKind`],
 //! [`Focus`], [`Pick`], [`EditKind`], [`Commit`], [`CommitMode`], [`MassEdit`],
 //! [`Help`], [`editable`].
@@ -33,8 +42,8 @@ use crate::columns::{self, Preset};
 use crate::data::{At, Cmd, Edge, Ev, File, Index, Matches, Mutations, Place, View, Worker};
 use crate::decode::{self, Node};
 use crate::edit::commit::{self, Target};
-use crate::edit::{Edits, Store, Summary};
-use crate::io::{Context, LuaMode, Msg, Open, Reader};
+use crate::edit::{Body, Edits, Forecast, Insert, SeqMap, Store, Summary};
+use crate::io::{Context, LuaMode, Msg, Reader};
 use crate::lua::Filter;
 use crate::range::Border;
 use crate::scheme::{Kind, Sub};
@@ -60,6 +69,8 @@ pub enum Key {
     PageDown,
     Home,
     End,
+    /// Insert: вставить сообщение.
+    Insert,
 }
 
 /// Строка таблицы: сообщение и готовые ячейки колонок.
@@ -71,12 +82,19 @@ pub struct RowView {
     pub data: Vec<u8>,
     /// Текст по колонкам [`Desk::columns`]; `None` — поля в этом типе нет.
     pub cells: Vec<Option<String>>,
+    /// Вставка: номер среди вставок перед `seq` (`agr:view-input-seq`).
+    pub ins: Option<usize>,
+    /// Текст колонки seq, если не просто seq: `×5` удалено, `5→4` после
+    /// записи, `+5` вставка.
+    pub tag: Option<String>,
 }
 
 /// Разобранное выбранное сообщение.
 #[derive(Debug, Clone)]
 pub struct Detail {
     pub seq: i64,
+    /// Деталь вставки: номер среди вставок перед `seq`.
+    pub ins: Option<usize>,
     /// Тело, из которого разобрано дерево: то же seq с новым телом — перечитать.
     pub data: Vec<u8>,
     pub root: Node,
@@ -112,10 +130,19 @@ pub enum PromptKind {
     Goto,
     Types,
     Columns,
-    /// Новое значение поля [`Prompt::path`] сообщения `seq`.
+    /// Новое значение поля [`Prompt::path`] сообщения `seq` (или его
+    /// вставки `ins`).
     Edit {
         seq: i64,
         kind: EditKind,
+        ins: Option<usize>,
+    },
+    /// Как удалить: со сдвигом seq или дырой.
+    Delete,
+    /// Новый тип сообщения `seq` (или его вставки `ins`).
+    Retype {
+        seq: i64,
+        ins: Option<usize>,
     },
     /// Массовая правка поля — один prompt на всю пачку, дальше подтверждение.
     MassEdit {
@@ -212,6 +239,8 @@ impl Prompt {
             PromptKind::Columns => "колонки",
             PromptKind::Edit { .. } => "новое значение поля",
             PromptKind::MassEdit { .. } => "массовая правка поля",
+            PromptKind::Delete => "удалить",
+            PromptKind::Retype { .. } => "сменить тип",
         }
     }
 
@@ -275,6 +304,8 @@ pub struct Commit {
     pub error: Option<String>,
     /// Прокрутка сводки и yaml (TUI).
     pub scroll: usize,
+    /// Прогноз последнего seq; `None` — ещё считается (`agr:seq-forecast`).
+    pub forecast: Option<Forecast>,
 }
 
 impl Commit {
@@ -290,6 +321,18 @@ impl Commit {
         match self.mode {
             CommitMode::NewFile => &mut self.new_name,
             CommitMode::Overwrite => &mut self.backup_name,
+        }
+    }
+
+    /// Первая строка диалога: ошибка записи (дубль seq) или прогноз
+    /// последнего seq.
+    pub fn headline(&self) -> String {
+        if let Some(e) = &self.error {
+            return e.clone();
+        }
+        match &self.forecast {
+            Some(f) => f.line(),
+            None => "последний seq: считаю…".into(),
         }
     }
 
@@ -309,6 +352,30 @@ struct Pending {
     patch: PathBuf,
     /// Строка ввода — вернуть, если правку не примут.
     prompt: Prompt,
+    /// Проверяется вставка.
+    insert: Option<InsertCheck>,
+}
+
+/// Проверяемая вставка: seq, номер и тело (msgid, байты), с которым сверить
+/// копию.
+type InsertCheck = (i64, usize, Option<(i32, Vec<u8>)>);
+
+/// Что удалить или чей тип сменить, когда выберут как.
+#[derive(Debug, Clone)]
+enum Targets {
+    /// Строки окна: seq, тип, следующий seq файла.
+    Rows(Vec<(i64, String, Option<i64>)>),
+    /// Все seq файла в диапазоне — их перечислит воркер.
+    Range { from: i64, to: i64 },
+}
+
+/// Что сделать с перечнем seq диапазона.
+#[derive(Debug, Clone)]
+enum SeqsFor {
+    /// Удалить: со сдвигом или дырой.
+    Delete(bool),
+    /// Сменить тип одним телом.
+    Retype(String),
 }
 
 /// Массовая правка поля: состояние подтверждения с подсчётом сообщений.
@@ -434,6 +501,16 @@ pub struct Desk {
     pub scan_pending: bool,
     /// Записанный файл: вид откроет его вместо этого ([`Desk::reopen`]).
     pub reopen: Option<PathBuf>,
+    /// Метка начала диапазона (`v`): seq.
+    pub mark: Option<i64>,
+    /// Ждёт выбора: как удалять или на какой тип сменить.
+    targets: Option<Targets>,
+    /// Диапазон ждёт перечня seq от воркера: id и что с ними сделать.
+    seqs_pending: Option<(u64, SeqsFor)>,
+    /// Прогноз ждёт последний живой seq от воркера.
+    forecast_id: u64,
+    /// seq после записи (`agr:seq-forecast`).
+    seq_map: SeqMap,
     notify: Arc<dyn Fn() + Send + Sync>,
     /// Канал действий агента: агент не трогает состояние сам, а просит
     /// (`agr:agent-same-desk`). `None` — вид уже отдал приёмник другому `Desk`
@@ -575,6 +652,11 @@ impl Desk {
             scan_id: 0,
             scan_pending: false,
             reopen: None,
+            mark: None,
+            targets: None,
+            seqs_pending: None,
+            forecast_id: 0,
+            seq_map: SeqMap::default(),
             notify,
             acts,
             act_tx,
@@ -643,11 +725,7 @@ impl Desk {
                 return;
             }
         };
-        self.status = format!(
-            "правок агента: {} в {} сообщ. — w зафиксировать",
-            e.fields(),
-            e.messages()
-        );
+        self.status = format!("правок агента: {} — w зафиксировать", e.count());
         self.apply(e, patch);
     }
 
@@ -769,7 +847,13 @@ impl Desk {
             && !self.searching
             && !self.scan_pending
             && self.pending.is_none()
-            && self.commit.as_ref().is_none_or(|c| c.running.is_none())
+            && self.seqs_pending.is_none()
+            && self.commit.as_ref().is_none_or(|c| {
+                c.running.is_none()
+                    && (c.forecast.is_some()
+                        || c.error.is_some()
+                        || self.file.info.seq_last.is_none())
+            })
     }
 
     fn event(&mut self, ev: Ev) {
@@ -862,18 +946,49 @@ impl Desk {
                     return;
                 }
                 let p = self.pending.take().unwrap();
-                match result {
-                    Ok(_) => {
-                        self.status = format!(
-                            "правок: {} в {} сообщ. — w зафиксировать",
-                            p.edits.fields(),
-                            p.edits.messages()
-                        );
+                match (result, p.insert) {
+                    (Ok(m), Some((seq, k, src))) => {
+                        // Вставка: тело от tll-patch — в строку вида; копия
+                        // должна совпасть с исходником (`agr:edit-checked`).
+                        if let Some((msgid, data)) = src {
+                            let differ = (msgid == m.msgid)
+                                .then(|| {
+                                    self.file.scheme.message(msgid).map(|st| {
+                                        decode::diff(&self.file.scheme, st, &data, &m.data)
+                                    })
+                                })
+                                .flatten();
+                            if let Some(d) = differ.filter(|d| !d.is_empty()) {
+                                self.status = format!(
+                                    "копия неточна (байты вне ASCII tll-patch не пишет), вставка не принята: {}",
+                                    d.into_iter()
+                                        .take(5)
+                                        .map(|(p, _)| p)
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                );
+                                return;
+                            }
+                        }
+                        let mut e = p.edits;
+                        e.set_insert_data(seq, k, m.data);
+                        match self.store.write(&e) {
+                            Ok(patch) => {
+                                self.status = format!("правок: {} — w зафиксировать", e.count());
+                                self.apply(e, patch);
+                            }
+                            Err(x) => self.status = x,
+                        }
+                    }
+                    (Ok(_), None) => {
+                        self.status = format!("правок: {} — w зафиксировать", p.edits.count());
                         self.apply(p.edits, Some(p.patch));
                     }
-                    Err(e) => {
+                    (Err(e), _) => {
                         self.status = format!("правка не принята: {}", one_line(&e));
-                        self.prompt = Some(p.prompt);
+                        if !matches!(p.prompt.kind, PromptKind::Columns) {
+                            self.prompt = Some(p.prompt);
+                        }
                     }
                 }
             }
@@ -888,22 +1003,96 @@ impl Desk {
                 let Some(c) = &mut self.commit else { return };
                 c.running = None;
                 match r {
-                    Ok(p) => {
-                        self.status = match c.mode {
-                            CommitMode::NewFile => format!("записан {}", p.display()),
-                            CommitMode::Overwrite => {
-                                format!(
+                    Ok(done) => {
+                        let written: Vec<&commit::Committed> =
+                            done.iter().filter(|d| !d.empty).collect();
+                        let mut status = match written.as_slice() {
+                            [one] if done.len() == 1 => match c.mode {
+                                CommitMode::NewFile => format!("записан {}", one.path.display()),
+                                CommitMode::Overwrite => format!(
                                     "записан {}, исходник — {}",
-                                    p.display(),
+                                    one.path.display(),
                                     c.backup_name.trim()
-                                )
-                            }
+                                ),
+                            },
+                            [] => "файлов не записано".to_string(),
+                            many => format!(
+                                "записано {}: {}",
+                                many.len(),
+                                many.iter()
+                                    .map(|d| d.path.display().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
                         };
+                        for d in done.iter().filter(|d| d.empty) {
+                            status += &format!("; {} — опустела, файла нет", d.path.display());
+                        }
+                        // Настоящий последний seq — после прохода (`agr:commit-seq-check`).
+                        let was = self.file.info.seq_last;
+                        let now = done.iter().filter_map(|d| d.last).max();
+                        match (now, was) {
+                            (Some(l), Some(w)) if l == w => {
+                                status += &format!("; последний seq {l} не изменился")
+                            }
+                            (Some(l), Some(w)) => {
+                                status += &format!("; последний seq {l} (был {w})")
+                            }
+                            (Some(l), None) => status += &format!("; последний seq {l}"),
+                            (None, _) => status += "; сообщений не записано",
+                        }
+                        self.status = status;
                         self.commit = None;
                         self.edits = Edits::default();
-                        self.reopen = Some(p);
+                        // Склейку заново не открываем: её части могли разъехаться
+                        // по новым именам; одиночный файл — открываем записанное.
+                        self.reopen = match written.as_slice() {
+                            [one] if done.len() == 1 => Some(one.path.clone()),
+                            _ => None,
+                        };
                     }
                     Err(e) => c.error = Some(e),
+                }
+            }
+            Ev::Seqs { id, result } => {
+                let Some((_, what)) = self.seqs_pending.take_if(|(i, _)| *i == id) else {
+                    return;
+                };
+                match result {
+                    Ok((seqs, after)) => {
+                        let rows: Vec<(i64, String, Option<i64>)> = seqs
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (seq, msgid))| {
+                                let next = seqs.get(i + 1).map(|(s, _)| *s).or(after);
+                                (*seq, self.type_name(*msgid), next)
+                            })
+                            .collect();
+                        match what {
+                            SeqsFor::Delete(renumber) => self.delete_rows(&rows, renumber),
+                            SeqsFor::Retype(name) => self.retype_rows(&rows, &name),
+                        }
+                    }
+                    Err(e) => self.status = format!("диапазон: {e}"),
+                }
+            }
+            Ev::TailAlive { id, result } => {
+                if id != self.forecast_id {
+                    return;
+                }
+                let before = self.file.info.seq_last.unwrap_or(-1);
+                let transform = self.transform_on();
+                let after = result.as_ref().ok().map(|a| self.seq_map.last(before, *a));
+                let Some(c) = &mut self.commit else { return };
+                match result {
+                    Ok(_) => {
+                        c.forecast = Some(Forecast {
+                            before,
+                            after: after.flatten(),
+                            transform,
+                        });
+                    }
+                    Err(e) => c.error = Some(format!("прогноз seq: {e}")),
                 }
             }
             Ev::MassScan { id, pairs } => {
@@ -940,13 +1129,67 @@ impl Desk {
             .iter()
             .map(|c| st.and_then(|s| decode::field(&self.file.scheme, s, &m.data, c)))
             .collect();
+        let tag = if self.edits.deleted(m.seq) {
+            Some(format!("×{}", m.seq))
+        } else {
+            match self.seq_map.out(m.seq) {
+                Some(o) if o != m.seq => Some(format!("{}→{o}", m.seq)),
+                _ => None,
+            }
+        };
         RowView {
             seq: m.seq,
             msgid: m.msgid,
             name,
             data: m.data,
             cells,
+            ins: None,
+            tag,
         }
+    }
+
+    /// Строки вида с вставками перед своими seq (`agr:view-input-seq`); в
+    /// фильтре вставок нет — фильтр ищет по файлу.
+    fn with_inserts(&self, rows: Vec<Msg>) -> Vec<RowView> {
+        let mut out = Vec::with_capacity(rows.len());
+        for m in rows {
+            if self.matches.is_none() {
+                for (k, i) in self.edits.inserts(m.seq).iter().enumerate() {
+                    let msgid = self
+                        .file
+                        .scheme
+                        .messages()
+                        .find(|st| st.name == i.name)
+                        .map(|st| st.msgid)
+                        .unwrap_or(-1);
+                    let mut r = self.row_view(Msg {
+                        seq: m.seq,
+                        msgid,
+                        data: i.data.clone(),
+                    });
+                    r.name = i.name.clone();
+                    r.ins = Some(k);
+                    r.tag = Some(format!("+{}", self.seq_map.out_insert(m.seq, k)));
+                    out.push(r);
+                }
+            }
+            out.push(self.row_view(m));
+        }
+        out
+    }
+
+    /// Имя типа по msgid.
+    fn type_name(&self, msgid: i32) -> String {
+        self.file
+            .scheme
+            .message(msgid)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| format!("#{msgid}"))
+    }
+
+    /// Включён transform: прогноз его не учитывает.
+    fn transform_on(&self) -> bool {
+        self.lua_enabled && !self.lua_code.is_empty() && self.lua_mode == LuaMode::Transform
     }
 
     fn window(
@@ -957,7 +1200,7 @@ impl Desk {
         at_start: bool,
         at_end: bool,
     ) {
-        let views: Vec<RowView> = rows.into_iter().map(|m| self.row_view(m)).collect();
+        let views = self.with_inserts(rows);
         let n = views.len();
         match place {
             Place::Replace => {
@@ -1115,10 +1358,11 @@ impl Desk {
         if self
             .detail
             .as_ref()
-            .is_some_and(|d| d.seq == r.seq && d.data == r.data)
+            .is_some_and(|d| d.seq == r.seq && d.ins == r.ins && d.data == r.data)
         {
             return;
         }
+        let ins = r.ins;
         let root = match self.file.scheme.message(r.msgid) {
             Some(st) => decode::decode(&self.file.scheme, st, &r.data),
             None => Node {
@@ -1143,6 +1387,7 @@ impl Desk {
             .unwrap_or(0);
         self.detail = Some(Detail {
             seq: r.seq,
+            ins,
             data: r.data.clone(),
             root,
             cursor,
@@ -1158,7 +1403,7 @@ impl Desk {
             None => (None, false),
         };
         Session {
-            file: self.file.path.display().to_string(),
+            file: self.file.name.clone(),
             messages: self.filter.messages.clone(),
             expr: self.filter.expr.clone(),
             search,
@@ -1182,6 +1427,7 @@ impl Desk {
             show_hex: self.show_hex,
             show_types: self.show_types,
             edits: self.edits.saved(),
+            stream: self.edits.saved_ops(),
             detail_ratio: Some(self.detail_ratio),
             lua_transform: if self.lua_code.is_empty() {
                 None
@@ -1222,16 +1468,14 @@ impl Desk {
         if s.focus_detail && s.detail_open {
             self.focus = Focus::Detail;
         }
-        if !s.edits.is_empty() {
+        if !s.edits.is_empty() || !s.stream.is_empty() {
             // Первое окно уже запрошено без правок — перечитать с ними.
-            let e = Edits::from_saved(&s.edits);
+            let e = Edits::from_session(&s.edits, &s.stream);
             match self.store.write(&e) {
                 Ok(p) => {
-                    self.status = format!(
-                        "правки из сессии: {} в {} сообщ. — w зафиксировать, u снять",
-                        e.fields(),
-                        e.messages()
-                    );
+                    self.status =
+                        format!("правки из сессии: {} — w зафиксировать, u снять", e.count());
+                    self.seq_map = e.seq_map();
                     self.edits = e;
                     self.file.patch = p.clone();
                     self.worker.send(Cmd::Patch(p));
@@ -1581,9 +1825,9 @@ impl Desk {
     /// перечитывания: `Some(i64::MAX)` — на новую последнюю строку, `None` —
     /// остаться на прежнем seq (`agr:reload`).
     fn reload_to(&mut self, land: Option<i64>) {
-        let saved = self.file.path.clone();
+        let saved = self.file.name.clone();
         let old_last = self.file.last();
-        let Ok(file) = File::open(&saved) else {
+        let Ok(file) = File::open_spec(&saved) else {
             self.status = "обновить не удалось".into();
             return;
         };
@@ -1593,7 +1837,7 @@ impl Desk {
             return;
         }
         // Сколько дописалось: считаем сообщения хвоста за прежним последним seq.
-        let extra = count_tail(&saved, old_last, file.last());
+        let extra = count_tail(&file.raw_sources(), old_last, file.last());
         let mut keep = self.session();
         if land == Some(i64::MAX) {
             // Для «встать в конец» не цепляемся за прежний seq: `restore` иначе
@@ -1777,6 +2021,21 @@ impl Desk {
                 );
             }
             Key::Char('w') => self.open_commit(),
+            Key::Delete | Key::Char('d') => self.open_delete(),
+            Key::Insert | Key::Char('o') => self.insert_copy(),
+            Key::Char('v') => {
+                self.mark = match (self.mark, self.selected()) {
+                    (Some(_), _) => None,
+                    (None, Some(r)) => Some(r.seq),
+                    (None, None) => None,
+                };
+                self.status = match self.mark {
+                    Some(m) => format!("метка на seq {m}: d — удалить диапазон, v — снять"),
+                    None => "метка снята".into(),
+                };
+            }
+            Key::Char('T') => self.open_retype(),
+            Key::Char('u') => self.restore_row(),
             Key::Char('q') => self.quit = true,
             Key::Char('{') => {
                 self.detail_ratio = (self.detail_ratio - 0.05).max(0.05);
@@ -1820,6 +2079,10 @@ impl Desk {
             }
             Key::Char('u') => {
                 self.unset_field();
+                return true;
+            }
+            Key::Char('T') => {
+                self.open_retype();
                 return true;
             }
             Key::Char('a') => {
@@ -1873,7 +2136,11 @@ impl Desk {
             .iter()
             .map(|c| Pick {
                 label: c.clone(),
-                hint: String::new(),
+                hint: if c == columns::DATA_LEN {
+                    "размер сообщения".into()
+                } else {
+                    String::new()
+                },
                 on: true,
                 value: None,
             })
@@ -1888,12 +2155,25 @@ impl Desk {
                 });
             }
         }
+        if !self.columns.iter().any(|c| c == columns::DATA_LEN) {
+            items.push(Pick {
+                label: columns::DATA_LEN.to_string(),
+                hint: "размер сообщения".into(),
+                on: false,
+                value: None,
+            });
+        }
         self.prompt = Some(Prompt {
             items,
             ..Prompt::line(PromptKind::Columns, String::new())
         });
     }
 
+    /// Ввод в открытом окне: строке или списке. Списки с галочками — типы `t`
+    /// и колонки `c` — живут одними клавишами: пробел переключает отметку,
+    /// Enter и Esc закрывают окно, Home/End — края списка (`agr:picker-keys`);
+    /// списки выбора одного пункта (удаление, смена типа, Enum/Bits) — не они:
+    /// там Enter выбирает пункт.
     fn prompt_key(&mut self, k: Key) {
         let Some(p) = &mut self.prompt else { return };
         let edit = matches!(
@@ -1906,13 +2186,22 @@ impl Desk {
                 ..
             }
         );
-        let list = matches!(p.kind, PromptKind::Types | PromptKind::Columns) || edit;
+        let list = matches!(
+            p.kind,
+            PromptKind::Types
+                | PromptKind::Columns
+                | PromptKind::Delete
+                | PromptKind::Retype { .. }
+        ) || edit;
         match k {
             Key::Esc => {
                 // Выбор типов применяется и по Esc: галочки уже стоят.
                 let p = self.prompt.take().unwrap();
                 if p.kind == PromptKind::Types {
                     self.apply_types(&p);
+                }
+                if matches!(p.kind, PromptKind::Delete | PromptKind::Retype { .. }) {
+                    self.targets = None;
                 }
             }
             Key::Enter if !list => {
@@ -1924,19 +2213,37 @@ impl Desk {
                     let p = self.prompt.take().unwrap();
                     self.submit(p);
                 }
-                _ => {
+                PromptKind::Delete | PromptKind::Retype { .. } => {
+                    let p = self.prompt.take().unwrap();
                     let vis = p.visible();
-                    if let Some(&(i, _)) = vis.get(p.sel) {
-                        match p.kind {
-                            PromptKind::Columns => {
-                                p.items[i].on = !p.items[i].on;
-                                let path = p.items[i].label.clone();
-                                self.toggle_column(&path);
+                    let Some(&(i, _)) = vis.get(p.sel) else {
+                        self.targets = None;
+                        return;
+                    };
+                    match p.kind {
+                        PromptKind::Delete => self.delete_chosen(i == 0),
+                        PromptKind::Retype { seq, ins } => {
+                            let name = p.items[i].label.clone();
+                            if self.targets.is_some() {
+                                self.on_targets(SeqsFor::Retype(name));
+                            } else {
+                                self.retype(seq, ins, &name);
                             }
-                            PromptKind::Types => p.items[i].on = !p.items[i].on,
-                            _ => {}
                         }
+                        _ => {}
                     }
+                }
+                PromptKind::Columns => {
+                    // Enter закрывает окно колонок, ничего не переключая:
+                    // видимость переключает только пробел.
+                    self.prompt.take();
+                }
+                _ => {
+                    // Сюда дотягивает только Types (остальные списки — выше).
+                    // Enter, как Esc, закрывает окно и применяет отмеченные
+                    // типы: отметку переключает только пробел (agr:picker-keys).
+                    let p = self.prompt.take().unwrap();
+                    self.apply_types(&p);
                 }
             },
             Key::Char(' ') if list => {
@@ -1992,6 +2299,8 @@ impl Desk {
                     }
                 }
             }
+            Key::Home if list => p.sel = 0,
+            Key::End if list => p.sel = p.visible().len().saturating_sub(1),
             Key::Up if list => p.sel = p.sel.saturating_sub(1),
             Key::Down if list => p.sel = (p.sel + 1).min(p.visible().len().saturating_sub(1)),
             Key::PageUp if list => p.sel = p.sel.saturating_sub(10),
@@ -2063,7 +2372,7 @@ impl Desk {
                 self.search(Filter::expr(text), back);
             }
             PromptKind::Goto => self.goto(&text),
-            PromptKind::Edit { seq, .. } => self.propose(seq, &p.path, &text, p.clone()),
+            PromptKind::Edit { seq, ins, .. } => self.propose(seq, ins, &p.path, &text, p.clone()),
             PromptKind::MassEdit { kind } => {
                 // Сохранить состояние массовой правки — дальше диалог подтверждения.
                 let Some(d) = &self.detail else { return };
@@ -2103,7 +2412,10 @@ impl Desk {
                 });
                 self.status = "массовая правка: подсчитываю…".into();
             }
-            PromptKind::Types | PromptKind::Columns => {}
+            PromptKind::Types
+            | PromptKind::Columns
+            | PromptKind::Delete
+            | PromptKind::Retype { .. } => {}
         }
     }
 }
@@ -2115,11 +2427,15 @@ fn one_line(e: &str) -> String {
 
 /// Сколько сообщений дописалось в файл после последнего открытого seq:
 /// читаем строго хвост за `old_last` и считаем, не держа тела в памяти.
-fn count_tail(path: &std::path::Path, old_last: i64, new_last: i64) -> usize {
+/// Хвост живёт в последней части склейки — туда и читаем.
+fn count_tail(srcs: &[crate::data::fetch::Src], old_last: i64, new_last: i64) -> usize {
     let ctx = Context::new();
+    let Some(j) = crate::data::fetch::Src::part_of(srcs, old_last.saturating_add(1)) else {
+        return new_last.saturating_sub(old_last).max(0) as usize;
+    };
     let Ok(r) = Reader::open(
         &ctx,
-        &Open::file(path).at(old_last.saturating_add(1)).meta(),
+        &srcs[j].open.clone().at(old_last.saturating_add(1)).meta(),
     ) else {
         return new_last.saturating_sub(old_last).max(0) as usize;
     };
@@ -2154,6 +2470,11 @@ impl Desk {
         self.edits.message(self.orig_seq(seq)).is_some()
     }
 
+    /// Строка — удалённое сообщение (`agr:view-input-seq`).
+    pub fn deleted_row(&self, r: &RowView) -> bool {
+        r.ins.is_none() && self.edits.deleted(self.orig_seq(r.seq))
+    }
+
     /// Тело сообщения `seq` менял мутатор (или выбросило его) —
     /// `agr:transform-shadow`. Само тело в виде уже прогоное.
     pub fn mutated_row(&self, seq: i64) -> bool {
@@ -2181,10 +2502,15 @@ impl Desk {
             return;
         }
         let (edit_kind, items, text) = self.edit_state(n);
+        if d.ins.is_none() && self.edits.deleted(self.orig_seq(d.seq)) {
+            self.status = "сообщение удалено — u в таблице вернёт его".into();
+            return;
+        }
         let mut p = Prompt::line(
             PromptKind::Edit {
                 seq: self.orig_seq(d.seq),
                 kind: edit_kind,
+                ins: d.ins,
             },
             text.clone(),
         );
@@ -2298,10 +2624,7 @@ impl Desk {
     /// Возвращает u64 представление байт поля (little-endian).
     /// Учитывает текущую деталь (если открыта) — берём данные из строки, соответствующей seq детали.
     fn field_raw_u64(&self, path: &str) -> Option<u64> {
-        let seq = self.detail.as_ref().map(|d| d.seq);
-        let row = seq
-            .and_then(|s| self.rows.iter().find(|r| r.seq == s))
-            .or_else(|| self.selected())?;
+        let row = self.detail_row()?;
         let data = &row.data;
         let msg = self.file.scheme.message(row.msgid)?;
         let (off, f) = self.file.scheme.field_path(msg, path)?;
@@ -2318,19 +2641,34 @@ impl Desk {
         }
     }
 
+    /// Строка детали (или выбранная).
+    fn detail_row(&self) -> Option<&RowView> {
+        let key = self.detail.as_ref().map(|d| (d.seq, d.ins));
+        key.and_then(|(s, i)| self.rows.iter().find(|r| r.seq == s && r.ins == i))
+            .or_else(|| self.selected())
+    }
+
     /// Тип [`Kind`] поля по пути `header.status` в сообщении детали (или выделенной строке).
     fn field_kind(&self, path: &str) -> Option<Kind> {
-        let seq = self.detail.as_ref().map(|d| d.seq);
-        let r = seq
-            .and_then(|s| self.rows.iter().find(|r| r.seq == s))
-            .or_else(|| self.selected())?;
+        let r = self.detail_row()?;
         let msg = self.file.scheme.message(r.msgid)?;
         let (_, field) = self.file.scheme.field_path(msg, path)?;
         Some(field.kind.clone())
     }
 
     /// Новое значение поля: проверить прогоном tll-patch, потом наложить.
-    fn propose(&mut self, seq: i64, path: &str, text: &str, prompt: Prompt) {
+    fn propose(&mut self, seq: i64, ins: Option<usize>, path: &str, text: &str, prompt: Prompt) {
+        if let Some(k) = ins {
+            // Поле вставки: тело вставки меняется, проверка — её командой.
+            let mut e = self.edits.clone();
+            if !e.set_insert(seq, k, path, text) {
+                self.status = "вставки уже нет".into();
+                return;
+            }
+            let i = e.inserts(seq)[k].clone();
+            self.check_insert(e, seq, k, &i, None, prompt);
+            return;
+        }
         let Some(d) = self.detail.as_ref().filter(|d| d.seq == seq) else {
             self.status = "сообщение ушло с экрана — правка не принята".into();
             return;
@@ -2385,6 +2723,7 @@ impl Desk {
             edits: e,
             patch: patch.clone(),
             prompt,
+            insert: None,
         });
         self.status = "проверяю правку…".into();
         self.worker.send(Cmd::Check {
@@ -2422,6 +2761,7 @@ impl Desk {
 
     /// Наложить правки: вид, фильтр и деталь перечитываются через новый yaml.
     fn apply(&mut self, e: Edits, patch: Option<PathBuf>) {
+        self.seq_map = e.seq_map();
         self.edits = e;
         self.file.patch = patch.clone();
         self.worker.send(Cmd::Patch(patch));
@@ -2445,10 +2785,405 @@ impl Desk {
         }
     }
 
+    /// `d`/`Del`: что удалить — выбранную строку или диапазон от метки `v` —
+    /// и выбор, как (`agr:stream-ops`). Вставку удаляет сразу.
+    pub fn open_delete(&mut self) {
+        if self.commit.is_some() || self.pending.is_some() {
+            return;
+        }
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        if let Some(k) = r.ins {
+            let mut e = self.edits.clone();
+            e.drop_insert(r.seq, k);
+            self.status = format!("вставка перед {} убрана", r.seq);
+            self.write_and_apply(e);
+            return;
+        }
+        let target = match self.mark_range(r.seq) {
+            Err(()) => return,
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                let next = if self.matches.is_none() {
+                    self.rows[self.sel + 1..]
+                        .iter()
+                        .find(|x| x.ins.is_none())
+                        .map(|x| x.seq)
+                } else {
+                    None
+                };
+                Targets::Rows(vec![(r.seq, r.name.clone(), next)])
+            }
+        };
+        let what = match &target {
+            Targets::Rows(v) if v.len() == 1 => format!("seq {}", v[0].0),
+            Targets::Rows(v) => format!("{} сообщ.", v.len()),
+            Targets::Range { from, to } => format!("seq {from}…{to}"),
+        };
+        self.targets = Some(target);
+        let pick = |label: &str, hint: &str| Pick {
+            label: label.into(),
+            hint: hint.into(),
+            on: false,
+            value: None,
+        };
+        self.prompt = Some(Prompt {
+            items: vec![
+                pick("со сдвигом: seq дальше уменьшатся", "Remove"),
+                pick("дырой: seq дальше прежние", "Clear"),
+            ],
+            ..Prompt::line(PromptKind::Delete, String::new())
+        });
+        self.status = format!("удалить {what}: Enter — выбрать, Esc — отмена");
+    }
+
+    /// Диапазон от метки `v` до `seq` (метка снимается): `Ok(None)` — метки
+    /// нет, `Err` — диапазон не взять, причина в статусе. В фильтре — только
+    /// найденное в окне, без фильтра — все seq файла (их перечислит воркер).
+    fn mark_range(&mut self, seq: i64) -> Result<Option<Targets>, ()> {
+        let Some(m) = self.mark.take().filter(|&m| m != seq) else {
+            return Ok(None);
+        };
+        let (from, to) = (m.min(seq), m.max(seq));
+        if self.matches.is_none() {
+            return Ok(Some(Targets::Range { from, to }));
+        }
+        let rows: Vec<(i64, String, Option<i64>)> = self
+            .rows
+            .iter()
+            .filter(|x| x.ins.is_none() && x.seq >= from && x.seq <= to)
+            .map(|x| (x.seq, x.name.clone(), None))
+            .collect();
+        if !rows.iter().any(|x| x.0 == from) {
+            self.status = "в фильтре диапазон — в пределах окна".into();
+            return Err(());
+        }
+        Ok(Some(Targets::Rows(rows)))
+    }
+
+    /// Сделать `what` с выбранным: строки — сразу, диапазон — по перечню seq.
+    fn on_targets(&mut self, what: SeqsFor) {
+        match self.targets.take() {
+            Some(Targets::Rows(rows)) => match what {
+                SeqsFor::Delete(renumber) => self.delete_rows(&rows, renumber),
+                SeqsFor::Retype(name) => self.retype_rows(&rows, &name),
+            },
+            Some(Targets::Range { from, to }) => {
+                self.scan_id += 1;
+                self.seqs_pending = Some((self.scan_id, what));
+                self.status = "диапазон: перечисляю seq…".into();
+                self.worker.send(Cmd::Seqs {
+                    id: self.scan_id,
+                    from,
+                    to,
+                });
+            }
+            None => {}
+        }
+    }
+
+    /// Выбран способ удаления.
+    fn delete_chosen(&mut self, renumber: bool) {
+        self.on_targets(SeqsFor::Delete(renumber));
+    }
+
+    /// Сменить тип у многих одним телом — поля по умолчанию, одноимённые не
+    /// переносятся: у каждого свои, а тело общее (`agr:stream-ops`).
+    fn retype_rows(&mut self, rows: &[(i64, String, Option<i64>)], name: &str) {
+        let mut e = self.edits.clone();
+        let n = e.retype_many(rows, name, &Body::new());
+        let Some(first) = rows
+            .iter()
+            .map(|r| r.0)
+            .find(|s| matches!(e.op(*s), Some(crate::edit::Op::Retype { .. })))
+            .filter(|_| n > 0)
+        else {
+            self.status = format!("менять нечего: все уже {name} или удалены");
+            return;
+        };
+        let patch = match self.store.write(&e) {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(x) => {
+                self.status = x;
+                return;
+            }
+        };
+        self.check_id += 1;
+        self.pending = Some(Pending {
+            id: self.check_id,
+            edits: e,
+            patch: patch.clone(),
+            prompt: Prompt::line(PromptKind::Columns, String::new()),
+            insert: None,
+        });
+        self.status = format!("тип {name} у {n} сообщ.: проверяю…");
+        self.worker.send(Cmd::Check {
+            id: self.check_id,
+            patch,
+            seq: first,
+        });
+    }
+
+    /// Удалить сообщения: seq, тип, следующий seq файла.
+    fn delete_rows(&mut self, rows: &[(i64, String, Option<i64>)], renumber: bool) {
+        if rows.is_empty() {
+            self.status = "удалять нечего".into();
+            return;
+        }
+        let mut e = self.edits.clone();
+        for (seq, name, next) in rows {
+            e.delete(*seq, name, renumber, *next);
+        }
+        self.status = format!(
+            "удалено {} сообщ. {} — u вернёт, w зафиксировать",
+            rows.len(),
+            if renumber {
+                "со сдвигом"
+            } else {
+                "дырой"
+            }
+        );
+        self.write_and_apply(e);
+    }
+
+    /// Правки без проверки (удаление, снятие): yaml вида и перечитать.
+    fn write_and_apply(&mut self, e: Edits) {
+        match self.store.write(&e) {
+            Ok(p) => self.apply(e, p),
+            Err(x) => self.status = x,
+        }
+    }
+
+    /// `u` в таблице: вернуть удалённое, снять смену типа, убрать вставку.
+    pub fn restore_row(&mut self) {
+        if self.commit.is_some() || self.pending.is_some() {
+            return;
+        }
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        let mut e = self.edits.clone();
+        let done = match r.ins {
+            Some(k) => e.drop_insert(r.seq, k),
+            None => e.restore(self.orig_seq(r.seq)),
+        };
+        if !done {
+            self.status = format!("seq {}: снимать нечего", r.seq);
+            return;
+        }
+        self.status = format!("seq {}: снято", r.seq);
+        self.write_and_apply(e);
+    }
+
+    /// `o`/`Ins`: вставить перед выбранной строкой её копию; дальше её поля и
+    /// тип правятся в детали. Копия проверяется tll-patch и сверяется с
+    /// исходником (`agr:stream-ops`).
+    pub fn insert_copy(&mut self) {
+        if self.commit.is_some() || self.pending.is_some() {
+            return;
+        }
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        if self.matches.is_some() {
+            self.status = "вставка — без фильтра: фильтр вставок не видит".into();
+            return;
+        }
+        let Some(st) = self.file.scheme.message(r.msgid) else {
+            self.status = format!("msgid {} нет в схеме", r.msgid);
+            return;
+        };
+        let root = decode::decode(&self.file.scheme, st, &r.data);
+        let seq = self.orig_seq(r.seq);
+        let ins = Insert {
+            name: r.name.clone(),
+            body: crate::edit::stream::body_of(&root, &r.data),
+            // Перед строкой файла: она есть, seq дальше +1.
+            occupied: true,
+            data: Vec::new(),
+        };
+        let mut e = self.edits.clone();
+        let k = match e.insert(seq, ins.clone()) {
+            Ok(k) => k,
+            Err(x) => {
+                self.status = x;
+                return;
+            }
+        };
+        let prompt = Prompt::line(PromptKind::Columns, String::new());
+        self.check_insert(e, seq, k, &ins, Some((r.msgid, r.data.clone())), prompt);
+    }
+
+    /// Проверить вставку её командой; `src` — тело, с которым должна совпасть
+    /// копия.
+    fn check_insert(
+        &mut self,
+        e: Edits,
+        seq: i64,
+        k: usize,
+        ins: &Insert,
+        src: Option<(i32, Vec<u8>)>,
+        prompt: Prompt,
+    ) {
+        let patch = match self.store.write_text(&Edits::insert_yaml(seq, ins)) {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(x) => {
+                self.status = x;
+                return;
+            }
+        };
+        self.check_id += 1;
+        self.pending = Some(Pending {
+            id: self.check_id,
+            edits: e,
+            patch: patch.clone(),
+            prompt,
+            insert: Some((seq, k, src)),
+        });
+        self.status = "проверяю вставку…".into();
+        self.worker.send(Cmd::Check {
+            id: self.check_id,
+            patch,
+            seq,
+        });
+    }
+
+    /// `T`: выбрать новый тип выбранного сообщения.
+    pub fn open_retype(&mut self) {
+        if self.commit.is_some() || self.pending.is_some() {
+            return;
+        }
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        let range = match self.mark_range(r.seq) {
+            Err(()) => return,
+            Ok(t) => t,
+        };
+        if range.is_none() && r.ins.is_none() && self.edits.deleted(self.orig_seq(r.seq)) {
+            self.status = "сообщение удалено — u вернёт его".into();
+            return;
+        }
+        let what = match &range {
+            Some(Targets::Rows(v)) => format!("{} сообщ.", v.len()),
+            Some(Targets::Range { from, to }) => format!("seq {from}…{to}"),
+            None => format!("seq {}", r.seq),
+        };
+        self.targets = range;
+        let items = self
+            .file
+            .scheme
+            .messages()
+            .map(|m| Pick {
+                label: m.name.clone(),
+                hint: String::new(),
+                on: m.name == r.name,
+                value: None,
+            })
+            .collect();
+        let mut p = Prompt {
+            items,
+            ..Prompt::line(
+                PromptKind::Retype {
+                    seq: self.orig_seq(r.seq),
+                    ins: r.ins,
+                },
+                String::new(),
+            )
+        };
+        p.sel = p.items.iter().position(|i| i.on).unwrap_or(0);
+        self.prompt = Some(p);
+        self.status = format!("{what}: новый тип — Enter, Esc — отмена");
+    }
+
+    /// Сменить тип: одноимённые поля того же вида переносятся, остальные —
+    /// по умолчанию (`agr:stream-ops`).
+    fn retype(&mut self, seq: i64, ins: Option<usize>, name: &str) {
+        let Some(r) = self
+            .rows
+            .iter()
+            .find(|x| self.orig_seq(x.seq) == seq && x.ins == ins)
+            .cloned()
+        else {
+            self.status = "сообщение ушло с экрана — тип не сменён".into();
+            return;
+        };
+        let scheme = self.file.scheme.clone();
+        let (Some(from), Some(to)) = (
+            scheme.message(r.msgid),
+            scheme.messages().find(|m| m.name == name),
+        ) else {
+            self.status = format!("типа {name} нет в схеме");
+            return;
+        };
+        let root = decode::decode(&scheme, from, &r.data);
+        let body: Body = crate::edit::stream::body_of(&root, &r.data)
+            .into_iter()
+            .filter(|(path, _)| {
+                !path.contains('[')
+                    && match (scheme.field_path(from, path), scheme.field_path(to, path)) {
+                        (Some((_, a)), Some((_, b))) => {
+                            format!("{:?}", a.kind) == format!("{:?}", b.kind)
+                        }
+                        _ => false,
+                    }
+            })
+            .collect();
+        let mut e = self.edits.clone();
+        if let Some(k) = ins {
+            let mut i = e.inserts(seq)[k].clone();
+            i.name = name.to_string();
+            i.body = body;
+            e.drop_insert(seq, k);
+            // На прежнее место: снять и вставить — номер тот же, если она последняя.
+            let mut rest: Vec<Insert> = e.inserts(seq).to_vec();
+            while e.drop_insert(seq, 0) {}
+            rest.insert(k, i.clone());
+            for x in rest {
+                let _ = e.insert(seq, x);
+            }
+            let prompt = Prompt::line(PromptKind::Columns, String::new());
+            self.check_insert(e, seq, k, &i, None, prompt);
+            return;
+        }
+        if let Err(x) = e.retype(seq, &r.name, name, body) {
+            self.status = x;
+            return;
+        }
+        let patch = match self.store.write(&e) {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                self.status = format!("seq {seq}: тип возвращён");
+                self.apply(e, None);
+                return;
+            }
+            Err(x) => {
+                self.status = x;
+                return;
+            }
+        };
+        self.check_id += 1;
+        self.pending = Some(Pending {
+            id: self.check_id,
+            edits: e,
+            patch: patch.clone(),
+            prompt: Prompt::line(PromptKind::Columns, String::new()),
+            insert: None,
+        });
+        self.status = format!("проверяю тип {name}…");
+        self.worker.send(Cmd::Check {
+            id: self.check_id,
+            patch,
+            seq,
+        });
+    }
+
     /// Открыть диалог фиксации.
     pub fn open_commit(&mut self) {
-        let transform =
-            self.lua_enabled && !self.lua_code.is_empty() && self.lua_mode == LuaMode::Transform;
+        let transform = self.transform_on();
         if self.edits.is_empty() && !transform {
             self.status = "правок нет — фиксировать нечего".into();
             return;
@@ -2456,33 +3191,60 @@ impl Desk {
         if self.pending.is_some() {
             return;
         }
-        let path = &self.file.path;
+        // Склейка: имя в диалоге — тег (каждой части свой файл), одиночный
+        // файл — полное имя цели (`agr:glue-commit`).
+        let glue = self.file.parts.len() > 1;
+        let path = &self.file.parts[0].path;
         self.commit = Some(Commit {
             mode: CommitMode::NewFile,
-            new_name: commit::free_name(path, "patched").display().to_string(),
-            backup_name: commit::free_name(path, "orig").display().to_string(),
+            new_name: if glue {
+                "patched".into()
+            } else {
+                commit::free_name(path, "patched").display().to_string()
+            },
+            backup_name: if glue {
+                "orig".into()
+            } else {
+                commit::free_name(path, "orig").display().to_string()
+            },
             summary: self.edits.summary(),
             yaml: self.edits.yaml(),
             running: None,
             error: None,
             scroll: 0,
+            forecast: None,
         });
+        // Прогноз последнего seq — по правкам, без прохода (`agr:seq-forecast`);
+        // удалён хвост — последний живой seq читает воркер.
+        let Some(before) = self.file.info.seq_last else {
+            return;
+        };
+        if self.seq_map.deleted(before) {
+            self.forecast_id += 1;
+            self.worker.send(Cmd::TailAlive {
+                id: self.forecast_id,
+                last: before,
+                dead: self.edits.deleted_seqs(),
+            });
+        } else if let Some(c) = &mut self.commit {
+            c.forecast = Some(Forecast {
+                before,
+                after: self.seq_map.last(before, None),
+                transform,
+            });
+        }
     }
 
     /// Начать запись по диалогу.
     pub fn start_commit(&mut self) {
+        let send_code = self.transform_on();
         let Some(c) = &mut self.commit else { return };
         if c.running.is_some() {
             return;
         }
-        let target = c.target();
-        if let Err(e) = commit::check(&self.file.path, &target) {
-            c.error = Some(e);
-            return;
-        }
-        let send_code =
-            self.lua_enabled && !self.lua_code.is_empty() && self.lua_mode == LuaMode::Transform;
-        let patch = match self.store.write(&self.edits) {
+        // Фиксация читает с начала файла — полный yaml с перенумерацией
+        // (`agr:view-input-seq`).
+        let patch = match self.store.write_full(&self.edits) {
             Ok(Some(p)) => Some(p),
             Ok(None) => {
                 if !send_code {
@@ -2497,11 +3259,58 @@ impl Desk {
                 return;
             }
         };
+        // Склейка (`agr:glue-commit`): каждой части — свой план; пишутся части с
+        // правками, с transform и те, что сдвинуты правками ранних частей.
+        let plans = if self.file.parts.len() > 1 {
+            let tag = c.name().trim().to_string();
+            if tag.is_empty() || tag.contains('/') {
+                c.error = Some("тег имени пуст или в нём путь".into());
+                return;
+            }
+            let map = self.edits.seq_map();
+            let overwrite = c.mode == CommitMode::Overwrite;
+            let mut plans = Vec::new();
+            for p in &self.file.parts {
+                let shift = map.before(p.begin());
+                if !send_code && !self.edits.touches(p.begin(), p.last()) && shift == 0 {
+                    continue;
+                }
+                if overwrite && commit::growing(&p.path) {
+                    c.error = Some(format!(
+                        "{}: растущий файл перезаписывать нельзя — только новым файлом",
+                        p.path.display()
+                    ));
+                    return;
+                }
+                plans.push(commit::Plan::Part {
+                    src: p.path.clone(),
+                    info: p.info.clone(),
+                    overwrite,
+                    tag: tag.clone(),
+                    shift,
+                });
+            }
+            if plans.is_empty() {
+                c.error = Some("в этих частях правок нет".into());
+                return;
+            }
+            plans
+        } else {
+            let target = c.target();
+            if let Err(e) = commit::check(&self.file.parts[0].path, &target) {
+                c.error = Some(e);
+                return;
+            }
+            vec![commit::Plan::Single {
+                src: self.file.parts[0].path.clone(),
+                target,
+            }]
+        };
         c.error = None;
         c.running = Some(0.0);
         self.worker.send(Cmd::Commit {
             patch,
-            target,
+            plans,
             lua_code: if send_code {
                 Some(self.lua_code.clone())
             } else {
@@ -2642,6 +3451,7 @@ impl Desk {
             edits: e,
             patch: patch.clone(),
             prompt: Prompt::line(PromptKind::Columns, String::new()),
+            insert: None,
         });
         self.status = "проверяю правку…".into();
         self.worker.send(Cmd::Check {

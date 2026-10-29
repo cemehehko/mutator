@@ -73,12 +73,10 @@ pub fn position(d: &Desk) -> String {
 
 /// Заголовок: файл, границы, сколько строк, фильтр, индекс.
 pub fn title(d: &Desk) -> String {
-    let name = d
-        .file
-        .path
+    let name = std::path::Path::new(&d.file.name)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .unwrap_or_else(|| d.file.name.clone());
     let i = &d.file.info;
     let mut s = format!(" {name}");
     if let (Some(b), Some(l)) = (i.seq_begin, i.seq_last) {
@@ -107,7 +105,7 @@ pub fn title(d: &Desk) -> String {
         s += &format!("  │ Lua transform {state} (F4 правка)");
     }
     if !d.edits.is_empty() {
-        s += &format!("  │ правок {} (w)", d.edits.fields());
+        s += &format!("  │ правок {} (w)", d.edits.count());
     }
     s
 }
@@ -186,9 +184,14 @@ pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
         for c in &layout {
             let text = cols::cell(r, c.kind);
             let fg = match c.kind {
-                ColKind::Seq if d.edited_row(r.seq) || d.mutated_row(r.seq) => EDITED,
+                _ if d.deleted_row(r) => DIM,
+                ColKind::Seq if r.ins.is_some() || d.edited_row(r.seq) || d.mutated_row(r.seq) => {
+                    EDITED
+                }
                 ColKind::Seq => DIM,
                 ColKind::Name => NAME,
+                ColKind::DataLen if d.edited_row(r.seq) || d.mutated_row(r.seq) => EDITED,
+                ColKind::DataLen => TEXT,
                 ColKind::Field(i)
                     if d.edited(r.seq, &d.columns[i])
                         || d.mutated(r.seq, &d.columns[i]).is_some() =>
@@ -322,10 +325,20 @@ fn draw_detail(g: &mut Grid<Act>, d: &Desk, y: usize, cols: usize, h: usize) {
         g.put(y, 0, "─ (нет строки)", DIM);
         return;
     };
-    let Some(row) = d.rows.iter().find(|r| r.seq == det.seq) else {
+    let Some(row) = d.rows.iter().find(|r| r.seq == det.seq && r.ins == det.ins) else {
         return;
     };
-    let head = format!("─ {}  seq {}", row.name, row.seq);
+    // Состав потока: вставка, удалено, seq после записи (`agr:view-input-seq`).
+    let head = match (&row.tag, row.ins) {
+        (Some(t), Some(_)) => format!(
+            "─ {}  вставка перед {} → seq {}",
+            row.name,
+            row.seq,
+            &t[1..]
+        ),
+        (Some(t), None) => format!("─ {}  seq {t}", row.name),
+        (None, _) => format!("─ {}  seq {}", row.name, row.seq),
+    };
     let tail = format!("  {} байт ", row.data.len());
     for x in 0..cols {
         g.set(y, x, '─', DIM);
@@ -400,7 +413,9 @@ fn draw_detail(g: &mut Grid<Act>, d: &Desk, y: usize, cols: usize, h: usize) {
         );
         let mut x = x;
         if !parts[0].is_empty() {
-            let fg = if d.edited(det.seq, &n.path) || d.mutated(det.seq, &n.path).is_some() {
+            let fg = if (det.ins.is_none() && d.edited(det.seq, &n.path))
+                || d.mutated(det.seq, &n.path).is_some()
+            {
                 EDITED
             } else {
                 TEXT
@@ -474,6 +489,7 @@ fn draw_picker(g: &mut Grid<Act>, d: &Desk, cols: usize, y: usize, h: usize) {
     }
     let hint = match p.kind {
         PromptKind::Types => "Пробел — отметить, Esc — применить",
+        PromptKind::Columns => "Пробел — вкл/выкл, Esc/Enter — закрыть",
         PromptKind::Edit {
             kind: EditKind::Enum,
             ..
@@ -539,8 +555,22 @@ fn draw_commit(g: &mut Grid<Act>, d: &Desk, cols: usize, rows: usize) {
         "Tab — режим  Enter — записать  Esc — отмена  ↑↓ PgUp/PgDn — листать",
         DIM,
     );
+    // Первая строка — прогноз последнего seq или ошибка записи
+    // (`agr:seq-forecast`, `agr:commit-seq-check`).
+    let head_fg = match (&c.error, &c.forecast) {
+        (Some(_), _) => ERROR,
+        (None, Some(f)) if f.changes() => EDITED,
+        _ => TEXT,
+    };
+    g.put(
+        y + 1,
+        x + 1,
+        &cols::fit(&c.headline(), w.saturating_sub(2), false),
+        head_fg,
+    );
+    let y = y + 1;
     let left = w / 2;
-    let body = h.saturating_sub(5);
+    let body = h.saturating_sub(6);
     let mut list: Vec<(String, Color32)> = c
         .summary
         .totals
@@ -580,7 +610,7 @@ fn draw_commit(g: &mut Grid<Act>, d: &Desk, cols: usize, rows: usize) {
         g.shade(yy + 1, end, 1, ACCENT);
     }
     let (msg, fg) = match (&c.error, c.running) {
-        (Some(e), _) => (e.clone(), ERROR),
+        (Some(_), _) => (String::new(), ERROR),
         (None, Some(p)) => (format!("пишу через tll-patch… {:.0}%", p * 100.0), OK),
         _ => (String::new(), DIM),
     };

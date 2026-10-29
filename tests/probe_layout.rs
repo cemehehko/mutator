@@ -9,7 +9,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui;
 use tui_patch::agent::MsgView;
 use tui_patch::data::File;
 use tui_patch::desk::Desk;

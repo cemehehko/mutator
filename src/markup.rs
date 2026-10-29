@@ -104,10 +104,10 @@ pub fn parse(text: &str) -> Vec<Block> {
                 j += 1;
             }
             let run: Vec<&str> = lines[start..j].to_vec();
-            if run.len() >= 2 && separator(&run[1]) {
+            if run.len() >= 2 && separator(run[1]) {
                 flush(&mut para, &mut out);
                 out.push(Block::Table {
-                    header: cells(&run[0]),
+                    header: cells(run[0]),
                     rows: run[2..].iter().map(|l| cells(l)).collect(),
                 });
                 i = j;
@@ -189,7 +189,9 @@ fn list_item(line: &str) -> Option<Block> {
     None
 }
 
-/// Разобрать строку на куски: `**жирный**` и `` `код` ``.
+/// Разобрать строку на куски: `**жирный**` и `` `код` ``. Код внутри
+/// жирного (`` **`Имя`** `` — модели пишут так часто) — жирный без кавычек:
+/// маркеры вида не должны вылезать текстом.
 pub fn spans(text: &str) -> Vec<Span> {
     let mut out: Vec<Span> = Vec::new();
     let mut plain = String::new();
@@ -203,7 +205,13 @@ pub fn spans(text: &str) -> Vec<Span> {
         if let Some(after) = rest.strip_prefix("**") {
             if let Some(end) = after.find("**") {
                 push(&mut out, &mut plain);
-                out.push(Span::Bold(after[..end].to_string()));
+                let inner: String = spans(&after[..end])
+                    .into_iter()
+                    .map(|s| match s {
+                        Span::Text(t) | Span::Bold(t) | Span::Code(t) => t,
+                    })
+                    .collect();
+                out.push(Span::Bold(inner));
                 rest = &after[end + 2..];
                 continue;
             }
@@ -384,6 +392,20 @@ mod tests {
                 Span::Text(" и ".into()),
                 Span::Code("код".into()),
                 Span::Text(" после".into()),
+            ]
+        );
+    }
+
+    /// `agr:markup-shared`
+    /// Код внутри жирного — жирный без обратных кавычек.
+    #[test]
+    fn code_inside_bold_is_bold_without_backticks() {
+        assert_eq!(
+            spans("**`Money`** (msgid 170) и **`a` и `b`**"),
+            vec![
+                Span::Bold("Money".into()),
+                Span::Text(" (msgid 170) и ".into()),
+                Span::Bold("a и b".into()),
             ]
         );
     }
