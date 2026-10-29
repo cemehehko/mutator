@@ -454,3 +454,67 @@ async fn a_token_guards_the_whole_server() {
         .unwrap();
     assert_eq!(by_cookie.status(), 200);
 }
+
+/// `agr:link-post` — снаружи `post_message` шлёт сообщение в линк, если
+/// канал его принимает: tcp-клиент к серверу — сообщение у сервера с
+/// заданным полем; у файла — 422 с причиной.
+#[tokio::test(flavor = "multi_thread")]
+async fn post_message_sends_into_a_link() {
+    let addr = serve().await;
+    let f = tui_patch::data::File::open(std::path::Path::new(&plain())).unwrap();
+    let scheme = f.scheme_url.clone().unwrap();
+    let port = 41000 + (std::process::id() % 10000) as u16;
+    let server = tui_patch::io::link::Link::start(
+        &format!("tcp://127.0.0.1:{port};mode=server;scheme={scheme}"),
+        "",
+        None,
+        None,
+        std::sync::Arc::new(|| {}),
+    )
+    .unwrap();
+    server.ready(|_| {}).expect("сервер");
+    let client = format!("tcp://127.0.0.1:{port};mode=client;scheme={scheme}");
+    let r = post(
+        &addr,
+        "post_message",
+        json!({"file": client, "message": "Order", "seq": 5,
+               "fields": {"header.order_id": "901", "header.status": "Wait"}}),
+    )
+    .await;
+    assert_eq!(r.status(), 200);
+    let v: Value = r.json().await.unwrap();
+    assert!(v["result"].as_str().unwrap().starts_with("sent"), "{v}");
+    let t = std::time::Instant::now();
+    while server.status().count < 1 {
+        assert!(
+            t.elapsed() < Duration::from_secs(10),
+            "{}",
+            server.status().line()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut rd =
+        tui_patch::io::Reader::open(&Context::new(), &tui_patch::io::Open::file(server.spool()))
+            .unwrap();
+    let m = rd.next().unwrap();
+    let st = f.scheme.message(m.msgid).unwrap();
+    let field = |p: &str| tui_patch::decode::field(&f.scheme, st, &m.data, p);
+    assert_eq!(
+        (m.seq, field("header.order_id").as_deref()),
+        (5, Some("901"))
+    );
+    assert_eq!(field("header.status").as_deref(), Some("Wait"));
+
+    let r = post(
+        &addr,
+        "post_message",
+        json!({"file": plain(), "message": "Order"}),
+    )
+    .await;
+    assert_eq!(r.status(), 422);
+    let p: Value = r.json().await.unwrap();
+    assert!(
+        p["detail"].as_str().unwrap().contains("not a live link"),
+        "{p}"
+    );
+}

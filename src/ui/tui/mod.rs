@@ -9,9 +9,9 @@
 //! изменённые мутатором (`agr:transform-shadow`).
 //!
 //! Файлы: `grid.rs` — сетка, `term/` — терминал, `browse.rs` — список линков
-//! resolve и ожидание выбранного линка.
+//! resolve и ожидание выбранного линка, `send.rs` — форма отправки в линк.
 //!
-//! Наружу: [`frame`], [`Act`], [`grid`], [`term`], [`browse`], [`position`].
+//! Наружу: [`frame`], [`Act`], [`grid`], [`term`], [`browse`], [`send`], [`position`].
 //!
 //! У линка в заголовке справа — его состояние ([`link_line`], `agr:link-state`):
 //! видно всегда, цветом по состоянию; тот же значок — в строке состояния окна.
@@ -20,6 +20,7 @@
 
 pub mod browse;
 pub mod grid;
+pub mod send;
 pub mod term;
 
 use egui::Color32;
@@ -346,6 +347,9 @@ pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
     }
     if let Some(f) = &d.link_form {
         browse::draw_form(&mut g, f, cols, rows);
+    }
+    if let Some(f) = d.send_form.as_mut() {
+        send::draw(&mut g, f, cols, rows);
     }
     g
 }

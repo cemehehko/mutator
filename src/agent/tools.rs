@@ -307,14 +307,32 @@ pub fn build_tools() -> Vec<Value> {
                 "required": ["edits"]
             }),
         ),
+        func(
+            "post_message",
+            "Send one message into the open live link, if its channel accepts              messages (a file or a read-only link refuses). `message` is the type              name; `fields` maps field paths as in message_detail (header.status,              legs[0].qty) to values as text; fields not given get default values.              Returns what was sent or why it was not.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string", "description": "Message type name" },
+                    "fields": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" },
+                        "description": "Field path -> value as text"
+                    },
+                    "seq": { "type": "integer", "description": "Message seq (default 0)" }
+                },
+                "required": ["message"]
+            }),
+        ),
     ];
     tools
 }
 
 /// Пачковая правка меняет правки — нужен один подтверждающий набор на всю
-/// пачку (`agr:agent-batch`).
+/// пачку (`agr:agent-batch`); отправка в линк уходит наружу — тоже через
+/// человека (`agr:link-post`).
 pub fn needs_confirm(name: &str) -> bool {
-    name == "edit_messages"
+    name == "edit_messages" || name == "post_message"
 }
 
 fn func(name: &str, description: &str, parameters: Value) -> Value {
@@ -352,6 +370,10 @@ pub fn execute(ctx: &mut ToolCtx, name: &str, arguments: &str) -> Result<String,
         "set_columns" => set_columns(ctx, &args),
         "search" => search(ctx, &args),
         "goto" => go_to(ctx, &args),
+        "post_message" => {
+            let (m, what) = post_prepare(ctx, &args)?;
+            post(ctx, m, &what)
+        }
         // `edit_messages` всегда перехватывает `needs_confirm`: напрямую его
         // не исполняют — пачку применяет [`apply_batch`] после подтверждения.
         "edit_messages" => Err("edit_messages исполняется только через подтверждение".into()),
@@ -971,18 +993,86 @@ fn go_to(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
     Ok(format!("moved to {where_}"))
 }
 
-/// Пачка правок, собранная [`prepare`] и ждущая человека; применяет её целиком
-/// [`apply_batch`] после единственного подтверждения (`agr:agent-batch`).
+/// `post_message`: сообщение в линк по типу и полям; незаданные поля — по
+/// умолчанию. Файл и линк, который только читает, — отказ (`agr:link-post`).
+fn post_prepare(ctx: &ToolCtx, args: &Value) -> Result<(Msg, String), String> {
+    let link = ctx
+        .file
+        .link
+        .as_ref()
+        .ok_or("this is a file, not a live link: post_message needs a link")?;
+    let st = link.status();
+    match st.post {
+        Some(true) => {}
+        Some(false) => return Err("the link's channel does not accept messages (read-only)".into()),
+        None => return Err(format!("the link is not ready yet: {}", st.line())),
+    }
+    let name = args
+        .get("message")
+        .and_then(|v| v.as_str())
+        .ok_or("нужен message: имя типа")?;
+    let seq = int(args, "seq").unwrap_or(0);
+    let mut body = crate::edit::Body::new();
+    if let Some(fields) = args.get("fields").and_then(|v| v.as_object()) {
+        for (k, v) in fields {
+            let text = match v {
+                Value::String(s) => s.clone(),
+                v => v.to_string(),
+            };
+            body.insert(k.clone(), text);
+        }
+    }
+    let s = scheme_of(ctx);
+    let m = crate::io::link::compose(s, name, seq, &body).map_err(|e| {
+        let known: Vec<String> = crate::send::fields(s, name, None)
+            .into_iter()
+            .map(|(p, _, _)| p)
+            .collect();
+        if known.is_empty() {
+            e
+        } else {
+            format!("{e}; fields of {name}: {}", known.join(", "))
+        }
+    })?;
+    let mut what = format!("send {name} seq {seq} to {}", st.url);
+    for (k, v) in &body {
+        what.push_str(&format!("\n  {k}: {v}"));
+    }
+    Ok((m, what))
+}
+
+/// Отправить готовое сообщение в линк файла.
+fn post(ctx: &ToolCtx, m: Msg, what: &str) -> Result<String, String> {
+    let link = ctx
+        .file
+        .link
+        .as_ref()
+        .ok_or("this is a file, not a live link")?;
+    link.post(m)?;
+    Ok(format!("sent: {what}"))
+}
+
+/// Пачка, собранная [`prepare`] и ждущая человека: правки или отправка в
+/// линк; применяет её целиком [`apply_batch`] после единственного
+/// подтверждения (`agr:agent-batch`, `agr:link-post`).
 #[derive(Debug, Default)]
 pub struct Batch {
     pub edits: crate::edit::Edits,
     /// Прогноз последнего seq после записи (`agr:seq-forecast`).
     pub forecast: Option<crate::edit::Forecast>,
+    /// Сообщение в линк и что это (`post_message`).
+    pub post: Option<(Msg, String)>,
 }
 
 impl Batch {
     /// Сводка для подтверждения: первой строкой — прогноз последнего seq.
     pub fn summary(&self) -> crate::edit::Summary {
+        if let Some((_, what)) = &self.post {
+            return crate::edit::Summary {
+                lines: what.lines().map(str::to_string).collect(),
+                totals: Vec::new(),
+            };
+        }
         let mut s = self.edits.summary();
         if let Some(f) = &self.forecast {
             s.lines.insert(0, f.line());
@@ -996,7 +1086,19 @@ impl Batch {
 /// схеме. Неверная пачка валится целиком и до человека не доходит — модель
 /// получает отказ и чинит записи. Чтение агента на время проверки идёт через
 /// кандидата; отказ от подтверждения откатывает [`restore`].
-pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
+pub fn prepare(ctx: &mut ToolCtx, name: &str, arguments: &str) -> Result<Batch, String> {
+    if name == "post_message" {
+        let args: Value = serde_json::from_str(if arguments.trim().is_empty() {
+            "{}"
+        } else {
+            arguments
+        })
+        .map_err(|e| format!("аргументы post_message: {e}"))?;
+        return Ok(Batch {
+            post: Some(post_prepare(ctx, &args)?),
+            ..Batch::default()
+        });
+    }
     if ctx.file.link.is_some() {
         // `agr:link-read-only`: линк только смотрят — отказ модели, человека не тревожим.
         return Err(
@@ -1065,7 +1167,11 @@ pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
         return Err(e);
     }
     let forecast = forecast(ctx, &edits)?;
-    Ok(Batch { edits, forecast })
+    Ok(Batch {
+        edits,
+        forecast,
+        post: None,
+    })
 }
 
 /// Сырые seq и msgid файла в `[from, to]` и следующий за ними.
@@ -1321,6 +1427,9 @@ fn verify(
 /// `agr:agent-batch` — применить подтверждённую пачку: один [`Act::Sync`] на
 /// всю пачку, вид перечитывает файл с правками один раз.
 pub fn apply_batch(ctx: &mut ToolCtx, batch: Batch) -> String {
+    if let Some((m, what)) = batch.post {
+        return post(ctx, m, &what).unwrap_or_else(|e| format!("ERROR: {e}"));
+    }
     ctx.edits = batch.edits;
     ctx.sync();
     format!(
@@ -1504,6 +1613,7 @@ mod tests {
         c.acts = Some(tx);
         let b = prepare(
             &mut c,
+            "edit_messages",
             &format!(
                 r#"{{"edits":[{{"seq":{seq},"path":"header.order_id","value":"777"}},{{"seq":{},"path":"header.order_id","value":"778"}}]}}"#,
                 seq + 1
@@ -1527,12 +1637,14 @@ mod tests {
         let seq = c.file.info.seq_begin.unwrap();
         let b = prepare(
             &mut c,
+            "edit_messages",
             &format!(r#"{{"edits":[{{"seq":{seq},"path":"header.order_id","value":"777"}}]}}"#),
         )
         .unwrap();
         c.edits = b.edits;
         let b = prepare(
             &mut c,
+            "edit_messages",
             &format!(r#"{{"edits":[{{"seq":{seq},"path":"header.order_id"}}]}}"#),
         )
         .unwrap();
@@ -1547,6 +1659,7 @@ mod tests {
         let seq = c.file.info.seq_begin.unwrap();
         let e = prepare(
             &mut c,
+            "edit_messages",
             &format!(
                 r#"{{"edits":[{{"seq":{seq},"path":"header.order_id","value":"777"}},{{"seq":{seq},"path":"header.order_id","value":"abc"}}]}}"#
             ),
@@ -1563,6 +1676,7 @@ mod tests {
         let seq = c.file.info.seq_begin.unwrap();
         let e = prepare(
             &mut c,
+            "edit_messages",
             &format!(r#"{{"edits":[{{"seq":{seq},"path":"нет.такого","value":"1"}}]}}"#),
         )
         .unwrap_err();
@@ -1584,7 +1698,7 @@ mod tests {
         .unwrap();
         let _ = link.ready(|_| {});
         c.file.link = Some(std::sync::Arc::new(link));
-        let e = prepare(&mut c, r#"{"edits":[{"seq":1}]}"#).unwrap_err();
+        let e = prepare(&mut c, "edit_messages", r#"{"edits":[{"seq":1}]}"#).unwrap_err();
         assert!(e.contains("read-only"), "{e}");
         let o = execute(&mut c, "file_overview", "{}").unwrap();
         assert!(o.contains("live link") && o.contains("Error"), "{o}");
@@ -1594,13 +1708,13 @@ mod tests {
     #[test]
     fn empty_or_broken_batch_is_an_error() {
         let mut c = ctx();
-        assert!(prepare(&mut c, r#"{"edits":[]}"#)
+        assert!(prepare(&mut c, "edit_messages", r#"{"edits":[]}"#)
             .unwrap_err()
             .contains("пустая"));
-        assert!(prepare(&mut c, r#"{"edits":[{}]}"#)
+        assert!(prepare(&mut c, "edit_messages", r#"{"edits":[{}]}"#)
             .unwrap_err()
             .contains("seq"));
-        assert!(prepare(&mut c, "не json")
+        assert!(prepare(&mut c, "edit_messages", "не json")
             .unwrap_err()
             .contains("аргументы"));
     }
@@ -1613,6 +1727,7 @@ mod tests {
         let mut c = ctx();
         let b = prepare(
             &mut c,
+            "edit_messages",
             r#"{"edits":[
                 {"seq":0,"path":"header.order_id","value":"777"},
                 {"op":"remove","seq":10,"till":13},
@@ -1642,6 +1757,7 @@ mod tests {
         let mut c = ctx();
         let b = prepare(
             &mut c,
+            "edit_messages",
             r#"{"edits":[{"op":"retype","seq":10,"till":20,"type":"Ping"}]}"#,
         )
         .unwrap();
@@ -1662,17 +1778,24 @@ mod tests {
         let mut c = ctx();
         let e = prepare(
             &mut c,
+            "edit_messages",
             r#"{"edits":[{"op":"remove","seq":5},{"seq":5,"path":"header.order_id","value":"1"}]}"#,
         )
         .unwrap_err();
         assert!(e.contains("удалён"), "{e}");
         let e = prepare(
             &mut c,
+            "edit_messages",
             r#"{"edits":[{"op":"insert","seq":100000,"copy_of":2}]}"#,
         )
         .unwrap_err();
         assert!(e.contains("за последним"), "{e}");
-        let e = prepare(&mut c, r#"{"edits":[{"op":"swap","seq":5}]}"#).unwrap_err();
+        let e = prepare(
+            &mut c,
+            "edit_messages",
+            r#"{"edits":[{"op":"swap","seq":5}]}"#,
+        )
+        .unwrap_err();
         assert!(e.contains("неизвестная op"), "{e}");
         assert!(c.edits.is_empty());
     }
@@ -1685,7 +1808,12 @@ mod tests {
         let before = std::fs::read(&c.file.parts[0].path).unwrap();
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         c.acts = Some(tx);
-        let b = prepare(&mut c, r#"{"edits":[{"op":"clear","seq":30,"till":40}]}"#).unwrap();
+        let b = prepare(
+            &mut c,
+            "edit_messages",
+            r#"{"edits":[{"op":"clear","seq":30,"till":40}]}"#,
+        )
+        .unwrap();
         apply_batch(&mut c, b);
         assert!(matches!(rx.try_recv(), Ok(Act::Sync { .. })));
         assert!(rx.try_recv().is_err());

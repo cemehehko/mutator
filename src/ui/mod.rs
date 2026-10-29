@@ -8,7 +8,7 @@
 //! `lua_editor.rs` — редактор Lua-кода transform-режима, `agent/` — состояние
 //! экрана агента, `help.rs` — справка F1, `shell.rs` — оболочка окна: список
 //! линков без файла, смена файла и перетаскивание, `browse.rs` — список линков
-//! resolve в окне, `menu.rs` — родное меню macOS и
+//! resolve в окне, `send.rs` — форма отправки в линк, `menu.rs` — родное меню macOS и
 //! диалог выбора файла), подсистема `tui/`
 //! (сетка,
 //! кадр, терминал), а этот модуль только собирает страницу. Общие правила
@@ -40,6 +40,8 @@ pub mod lua_editor;
 mod mass;
 #[cfg(feature = "gui")]
 mod menu;
+#[cfg(feature = "gui")]
+mod send;
 #[cfg(feature = "gui")]
 mod shell;
 mod table;
@@ -375,10 +377,12 @@ impl App {
     fn gui(&mut self, ui: &mut egui::Ui, keys: Vec<Key>) {
         for k in keys {
             // В окне строки ввода — свои поля egui: клавиши их только фокусируют.
-            // Форма `o` — как строка ввода: буквы — ей, а не панели.
+            // Формы `o` и `s` — как строка ввода: буквы — им, а не панели.
             match (
                 k,
-                self.desk.prompt.is_some() || self.desk.link_form.is_some(),
+                self.desk.prompt.is_some()
+                    || self.desk.link_form.is_some()
+                    || self.desk.send_form.is_some(),
             ) {
                 (Key::Char('f'), false) => self.bar.focus = Some(bar::Field::Filter),
                 (Key::Char('/'), false) | (Key::Char('?'), false) => {
@@ -432,6 +436,10 @@ impl App {
         #[cfg(feature = "gui")]
         if let Some(f) = &self.desk.link_form {
             browse::form(ui, f);
+        }
+        #[cfg(feature = "gui")]
+        if let Some(f) = &self.desk.send_form {
+            send::show(ui, f);
         }
         mass::show(ui, &mut self.desk);
     }

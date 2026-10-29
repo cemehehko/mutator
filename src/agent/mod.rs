@@ -995,7 +995,7 @@ fn run_queue(state: &mut State, ctx: &mut ToolCtx, ev_tx: &Sender<Ev>, mut turn:
             continue;
         }
         if needs_confirm(&call.name) {
-            match tools::prepare(ctx, &call.arguments) {
+            match tools::prepare(ctx, &call.name, &call.arguments) {
                 Ok(batch) => {
                     if let Some(ev) =
                         trace::trace(ctx, format!("? {} ждёт подтверждения", call.name))
@@ -1463,6 +1463,38 @@ mod tests {
         let last = s.store.by_id(&id).unwrap().messages.last().unwrap().clone();
         assert_eq!(last.role(), "tool");
         assert!(last.content().contains("нет поля"), "{}", last.content());
+    }
+
+    /// `agr:link-post` — отправка в линк идёт через человека; на файле она
+    /// невозможна, и отказ модель получает сама, человека не зовут.
+    #[tokio::test]
+    async fn post_message_needs_the_human_and_a_link() {
+        assert!(needs_confirm("post_message"));
+        let mut s = state();
+        let id = store::new_dialog(&mut s.store);
+        let mut post = call("post_message");
+        post.arguments = r#"{"message":"Order","fields":{"header.order_id":"1"}}"#.into();
+        let turn = Turn {
+            dialog: id.clone(),
+            partial: String::new(),
+            queue: vec![post].into(),
+        };
+        let mut c = tools::tests_ctx();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let phase = run_queue(&mut s, &mut c, &tx, turn);
+        assert!(!matches!(phase, Phase::Confirm { .. }), "человека не зовут");
+        assert!(
+            rx.try_iter()
+                .all(|e| !matches!(e, Ev::ConfirmRequest { .. })),
+            "запроса подтверждения нет"
+        );
+        let last = s.store.by_id(&id).unwrap().messages.last().unwrap().clone();
+        assert_eq!(last.role(), "tool");
+        assert!(
+            last.content().contains("not a live link"),
+            "{}",
+            last.content()
+        );
     }
 
     /// Отказ виден модели: пачка не применена, кандидат откачен.

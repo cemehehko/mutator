@@ -8,6 +8,9 @@
 //! Функции не слинкованы: libtll грузится при первом [`api`]
 //! (`agr:backend-dlopen`, [`crate::io::dynlib`]); обёртки носят имена функций C.
 //! Путь к библиотеке можно задать в `MUTATOR_LIBTLL`.
+//!
+//! Caps канала — [`TLL_CAPS_PROXY`], [`TLL_CAPS_INPUT`], [`TLL_CAPS_OUTPUT`]:
+//! по ним линк решает, принимает ли канал сообщения (`agr:link-post`).
 
 #![allow(non_camel_case_types, dead_code)]
 
@@ -24,6 +27,9 @@ pub const TLL_MESSAGE_STATE: c_short = 2;
 pub const TLL_MESSAGE_MASK_DATA: c_uint = 1;
 pub const TLL_MESSAGE_MASK_STATE: c_uint = 1 << 2;
 
+pub const TLL_CAPS_PROXY: c_uint = 0x2;
+pub const TLL_CAPS_INPUT: c_uint = 0x4;
+pub const TLL_CAPS_OUTPUT: c_uint = 0x8;
 pub const TLL_DCAPS_PROCESS: c_uint = 0x10;
 pub const TLL_DCAPS_SUSPEND: c_uint = 0x40;
 

@@ -10,20 +10,29 @@
 //! сообщение. Состояние канала, ошибка журнала, есть ли у линка история и
 //! сколько записано — в [`Status`] (`agr:link-state`); вид будит `notify`.
 //!
+//! Канал, который принимает сообщения ([`DriverLink::can_post`] — в
+//! `Status::post`), можно и писать (`agr:link-post`): [`Link::post`] кладёт
+//! заявку в очередь потока записи — канал у него, — тот шлёт её между
+//! проходами и отвечает. Тело собирает [`compose`] по текстам полей.
+//!
 //! Спул по умолчанию временный: `$TMPDIR/mutator-<pid>/`, удаляется вместе с
 //! [`Link`] и при выходе; каталоги процессов, которых уже нет, чистит
 //! следующий запуск ([`cleanup`], [`cleanup_stale`]). С `--keep DIR` спул
 //! остаётся датником в `DIR` под именем из url ([`sanitize`]).
 //!
 //! Наружу: [`Link`], [`Spool`], [`Status`], [`LinkState`], [`LinkEvent`], [`DriverLink`],
-//! [`is_link`], [`default_open`].
+//! [`is_link`], [`default_open`], [`compose`].
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use std::sync::mpsc;
+
 use super::{drivers, Backend, Context, Info, Msg, Writer};
+use crate::edit::Body;
+use crate::scheme::Scheme;
 
 /// Параметры открытия по умолчанию — у бэкенда, по url: онлайн, история — по
 /// запросу (`--open`, `o`); у канала без истории параметров нет вовсе — свой
@@ -78,6 +87,21 @@ pub trait DriverLink: Send {
     fn scheme_url(&self) -> Option<String>;
     /// Умеет ли канал отдавать историю (stream-клиент); известно после Active.
     fn history(&self) -> bool;
+    /// Принимает ли канал сообщения ([`DriverLink::post`]); известно после Active.
+    fn can_post(&self) -> bool {
+        false
+    }
+    /// Послать сообщение в канал.
+    fn post(&mut self, _m: &Msg) -> Result<(), String> {
+        Err("линк не принимает сообщения".into())
+    }
+}
+
+/// Сообщение `name` для отправки в линк: тело — из текстов полей `body`, как их
+/// показывает деталь (`agr:edit-encode`); незаданные поля — по умолчанию.
+pub fn compose(scheme: &Scheme, name: &str, seq: i64, body: &Body) -> Result<Msg, String> {
+    let (msgid, data) = crate::edit::encode::compose(scheme, name, body)?;
+    Ok(Msg { seq, msgid, data })
 }
 
 /// Линк ли это: url с протоколом, который узнал бэкенд, а не `file://` и не путь.
@@ -96,6 +120,8 @@ pub struct Status {
     pub error: Option<String>,
     /// Есть ли история; `None` — ещё не Active.
     pub history: Option<bool>,
+    /// Принимает ли канал сообщения; `None` — ещё не Active.
+    pub post: Option<bool>,
     /// История догружена, идёт онлайн.
     pub online: bool,
     /// Записано сообщений и последний seq.
@@ -149,10 +175,18 @@ pub struct Link {
     spool: Arc<Spool>,
     status: Arc<Mutex<Status>>,
     stop: Arc<AtomicBool>,
+    /// Заявки на отправку — потоку линка: канал у него.
+    posts: Mutex<mpsc::Sender<Post>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 type Notify = Arc<dyn Fn() + Send + Sync>;
+
+/// Заявка на отправку и куда ответить.
+type Post = (Msg, mpsc::SyncSender<Result<(), String>>);
+
+/// Сколько ждать ответа канала на отправку.
+const POST_WAIT: Duration = Duration::from_secs(5);
 
 static SPOOLS: AtomicU64 = AtomicU64::new(0);
 
@@ -253,9 +287,10 @@ impl Link {
             append,
         };
         let (st, halt) = (status.clone(), stop.clone());
+        let (posts, inbox) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("link".into())
-            .spawn(move || record(&job, &st, &halt, &notify))
+            .spawn(move || record(&job, &st, &halt, &inbox, &notify))
             .map_err(|e| e.to_string())?;
         Ok(Link {
             url: url.into(),
@@ -264,8 +299,31 @@ impl Link {
             spool,
             status,
             stop,
+            posts: Mutex::new(posts),
             thread: Some(thread),
         })
+    }
+
+    /// Послать сообщение в канал (`agr:link-post`): заявку забирает поток
+    /// линка на ближайшем проходе, ответ — не дольше 5 с. Канал не
+    /// Active или не принимает сообщения — отказ сразу.
+    pub fn post(&self, m: Msg) -> Result<(), String> {
+        let s = self.status();
+        if s.state != LinkState::Active {
+            return Err(format!("линк не готов: {}", s.line()));
+        }
+        if s.post != Some(true) {
+            return Err("линк не принимает сообщения".into());
+        }
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.posts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .send((m, reply))
+            .map_err(|_| "линк закрыт".to_string())?;
+        answer
+            .recv_timeout(POST_WAIT)
+            .map_err(|_| "канал не ответил на отправку".to_string())?
     }
 
     /// Url линка.
@@ -332,8 +390,15 @@ struct Job {
     append: bool,
 }
 
-/// Поток записи: канал линка → спул, состояние → [`Status`].
-fn record(job: &Job, status: &Mutex<Status>, stop: &AtomicBool, notify: &Notify) {
+/// Поток записи: канал линка → спул, состояние → [`Status`]; заявки `posts`
+/// уходят в канал между проходами.
+fn record(
+    job: &Job,
+    status: &Mutex<Status>,
+    stop: &AtomicBool,
+    posts: &mpsc::Receiver<Post>,
+    notify: &Notify,
+) {
     let set = |f: &mut dyn FnMut(&mut Status)| {
         f(&mut status.lock().unwrap_or_else(|e| e.into_inner()));
         notify();
@@ -360,10 +425,11 @@ fn record(job: &Job, status: &Mutex<Status>, stop: &AtomicBool, notify: &Notify)
                         match open_spool(&ctx, job, link.scheme_url()) {
                             Ok(w) => {
                                 writer = Some(w);
-                                let h = link.history();
+                                let (h, p) = (link.history(), link.can_post());
                                 set(&mut |s| {
                                     s.spool = Some(job.spool.clone());
                                     s.history = Some(h);
+                                    s.post = Some(p);
                                 });
                             }
                             Err(e) => return fail(e),
@@ -392,6 +458,9 @@ fn record(job: &Job, status: &Mutex<Status>, stop: &AtomicBool, notify: &Notify)
                     dirty = true;
                 }
             }
+        }
+        for (m, reply) in posts.try_iter() {
+            let _ = reply.send(link.post(&m));
         }
         if dirty && woke.elapsed() >= WAKE {
             notify();

@@ -337,3 +337,157 @@ fn form_with_other_url_goes_to_the_host() {
     );
     let _ = std::fs::remove_dir_all(src.parent().unwrap());
 }
+
+/// Пара tcp-линков на одной схеме: сервер и клиент к нему — как канал стенда,
+/// который принимает сообщения.
+fn tcp_pair(name: &str) -> (Link, Link) {
+    let scheme = File::open(&root().join("tests/data/plain.dat"))
+        .unwrap()
+        .scheme_url
+        .expect("схема");
+    let port = 30000 + (std::process::id() % 10000) as u16 + name.len() as u16;
+    let server = start(
+        &format!("tcp://127.0.0.1:{port};mode=server;scheme={scheme}"),
+        "",
+        None,
+    );
+    server.ready(|_| {}).expect("сервер");
+    let client = start(
+        &format!("tcp://127.0.0.1:{port};mode=client;scheme={scheme}"),
+        "",
+        None,
+    );
+    client.ready(|_| {}).expect("клиент");
+    (server, client)
+}
+
+/// Дождаться, пока `ok` не скажет «да» о состоянии линка.
+fn until_link(l: &Link, what: &str, ok: impl Fn(&tui_patch::io::link::Status) -> bool) {
+    let t = Instant::now();
+    while !ok(&l.status()) {
+        assert!(
+            t.elapsed() < Duration::from_secs(10),
+            "{what}: {}",
+            l.status().line()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// `agr:link-post` — канал, который принимает сообщения, их и получает:
+/// клиент шлёт собранное по полям сообщение, сервер пишет его в спул тем же
+/// телом; линк без `TLL_CAPS_OUTPUT` — отказ без отправки.
+#[test]
+fn link_post_reaches_the_channel() {
+    io::quiet();
+    let (server, client) = tcp_pair("post");
+    until_link(&client, "клиент Active", |s| s.post.is_some());
+    assert_eq!(client.status().post, Some(true));
+    let f = File::open(&root().join("tests/data/plain.dat")).unwrap();
+    let body = [("header.order_id".to_string(), "777".to_string())]
+        .into_iter()
+        .collect();
+    let m = tui_patch::io::link::compose(&f.scheme, "Order", 42, &body).unwrap();
+    client.post(m.clone()).expect("отправка");
+    until_link(&server, "сервер получил", |s| s.count == 1);
+    let got = File::open(server.spool()).unwrap();
+    let mut r =
+        tui_patch::io::Reader::open(&Context::new(), &tui_patch::io::Open::file(server.spool()))
+            .unwrap();
+    let msg = r.next().expect("сообщение в спуле");
+    assert_eq!(
+        (msg.seq, msg.msgid, msg.data.clone()),
+        (42, m.msgid, m.data.clone())
+    );
+    let st = got.scheme.message(msg.msgid).unwrap();
+    assert_eq!(
+        tui_patch::decode::field(&got.scheme, st, &msg.data, "header.order_id").as_deref(),
+        Some("777")
+    );
+}
+
+/// `agr:link-post` — канал, который только читает (`file://` под `lua+`),
+/// сообщений не принимает: отправка — отказ без вызова канала.
+#[test]
+fn read_only_link_refuses_post() {
+    if !lua() {
+        return;
+    }
+    let src = source("ro-post");
+    let l = start(&url(&src), "", None);
+    l.ready(|_| {}).expect("спул");
+    until_link(&l, "Active", |s| s.post.is_some());
+    assert_eq!(l.status().post, Some(false), "{}", l.status().line());
+    let e = l
+        .post(Msg {
+            seq: 1,
+            msgid: 30,
+            data: vec![0; 4],
+        })
+        .unwrap_err();
+    assert!(e.contains("не принимает"), "{e}");
+    let _ = std::fs::remove_dir_all(src.parent().unwrap());
+}
+
+/// `agr:link-post` — `s` в виде линка, который принимает сообщения: форма со
+/// всеми полями типа, правка поля, Enter — сообщение у канала; у линка,
+/// который только читает, `s` — отказ в строке состояния.
+#[test]
+fn send_form_posts_from_the_view() {
+    io::quiet();
+    let (server, client) = tcp_pair("send-view");
+    let mut d = desk(client);
+    until(&mut d, "линк Active", |d| {
+        d.link_status().is_some_and(|s| s.post.is_some())
+    });
+    d.key(Key::Char('s'));
+    let f = d.send_form.as_mut().expect("форма открылась");
+    while f.name() != "Order" {
+        f.sel = 0;
+        f.key(Key::Right, &d.file.scheme.clone());
+    }
+    let at = f
+        .fields
+        .iter()
+        .position(|x| x.path == "header.order_id")
+        .unwrap();
+    d.send_form.as_mut().unwrap().sel = at + 2;
+    d.key(Key::Ctrl('u'));
+    for c in "4242".chars() {
+        d.key(Key::Char(c));
+    }
+    let g = tui_patch::ui::tui::frame(&mut d, 120, 30);
+    let screen: String = (0..30).map(|r| g.text(r)).collect::<Vec<_>>().join("\n");
+    assert!(
+        screen.contains("Отправить в линк") && screen.contains("4242"),
+        "{screen}"
+    );
+    d.key(Key::Enter);
+    assert!(
+        d.send_form.is_none(),
+        "форма закрылась: {:?}",
+        d.send_form.as_ref().map(|f| &f.error)
+    );
+    assert!(d.status.contains("отправлено Order"), "{}", d.status);
+    until_link(&server, "сервер получил", |s| s.count == 1);
+    let f = File::open(server.spool()).unwrap();
+    let mut r =
+        tui_patch::io::Reader::open(&Context::new(), &tui_patch::io::Open::file(server.spool()))
+            .unwrap();
+    let m = r.next().unwrap();
+    let st = f.scheme.message(m.msgid).unwrap();
+    assert_eq!(
+        tui_patch::decode::field(&f.scheme, st, &m.data, "header.order_id").as_deref(),
+        Some("4242")
+    );
+
+    if lua() {
+        let src = source("ro-send");
+        let mut d = desk(start(&url(&src), "", None));
+        until(&mut d, "весь источник", |d| total(d) == 400);
+        d.key(Key::Char('s'));
+        assert!(d.send_form.is_none());
+        assert!(d.status.contains("не принимает"), "{}", d.status);
+        let _ = std::fs::remove_dir_all(src.parent().unwrap());
+    }
+}

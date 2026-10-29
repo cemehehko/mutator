@@ -495,7 +495,7 @@ pub struct Line {
 }
 
 impl Line {
-    fn new(text: &str) -> Line {
+    pub(crate) fn new(text: &str) -> Line {
         Line {
             text: text.to_string(),
             cursor: text.chars().count(),
@@ -510,7 +510,7 @@ impl Line {
     }
 
     /// Правка клавишей; `false` — клавиша не строки.
-    fn key(&mut self, k: Key) -> bool {
+    pub(crate) fn key(&mut self, k: Key) -> bool {
         let n = self.text.chars().count();
         match k {
             Key::Char(c) if !c.is_control() && !('\u{F1}'..='\u{F9}').contains(&c) => {

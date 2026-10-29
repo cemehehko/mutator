@@ -11,7 +11,7 @@
 //! списка (Ctrl+O) и поверх вида линка (`o`).
 //!
 //! Наружу: [`frame`], [`apply`], [`waiting`], [`draw_form`], [`layout`] (его же
-//! берёт окно).
+//! берёт окно), `shown` — строка ввода с курсором, общая с формой отправки.
 
 use super::grid::Grid;
 use super::Act;
@@ -181,7 +181,7 @@ pub fn frame(b: &mut Browse, cols: usize, rows: usize) -> Grid<Act> {
 
 /// Строка формы шириной `w`: текст с курсором `▏`, окно сдвинуто так, чтобы
 /// курсор был виден.
-fn shown(l: &Line, w: usize, active: bool) -> String {
+pub(super) fn shown(l: &Line, w: usize, active: bool) -> String {
     let mut chars: Vec<char> = l.text.chars().collect();
     if active {
         chars.insert(l.cursor.min(chars.len()), '▏');

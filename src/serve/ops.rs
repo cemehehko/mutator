@@ -42,6 +42,7 @@ pub const OPS: &[&str] = &[
     "make_filter",
     "search_messages",
     "count_messages",
+    "post_message",
 ];
 
 /// Сколько ждать, пока линк станет Active.

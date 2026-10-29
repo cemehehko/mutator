@@ -9,6 +9,7 @@
 //! [`lua_highlight`] — подсветка синтаксиса Lua для редактора transform-кода,
 //! [`markup`] — разметка ответа модели, общая для окна и TUI,
 //! [`browse`] — список линков resolve-сервера для выбора вместо файла,
+//! [`send`] — форма отправки сообщения в линк,
 //! [`agent`] — диалог с моделью: чтение датника инструментами и сборка Lua-фильтра,
 //! `serve` — сервер для тестировщиков: инструменты агента по REST и SSE (фича `rest`).
 
@@ -28,6 +29,7 @@ pub mod markup;
 pub mod range;
 pub mod recent;
 pub mod scheme;
+pub mod send;
 #[cfg(feature = "rest")]
 pub mod serve;
 pub mod session;

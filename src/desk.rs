@@ -503,6 +503,9 @@ pub struct Desk {
     pub reopen: Option<PathBuf>,
     /// Форма «Открыть линк» (`o` у линка): url и параметры (`agr:link-open`).
     pub link_form: Option<crate::browse::OpenForm>,
+    /// Форма «Отправить в линк» (`s` у линка, который принимает сообщения;
+    /// `agr:link-post`).
+    pub send_form: Option<crate::send::SendForm>,
     /// Другой линк, url и параметры: его открывает хозяин вида (окно,
     /// терминал, браузер) — вид сам файл не меняет.
     pub open_link: Option<(String, String)>,
@@ -673,6 +676,7 @@ impl Desk {
             reopen: None,
             mark: None,
             link_form: None,
+            send_form: None,
             open_link: None,
             targets: None,
             seqs_pending: None,
@@ -1940,6 +1944,10 @@ impl Desk {
             self.prompt_key(k);
             return;
         }
+        if self.send_form.is_some() {
+            self.send_key(k);
+            return;
+        }
         if let Some(f) = self.link_form.as_mut() {
             use crate::browse::FormAction;
             match f.key(k) {
@@ -2062,6 +2070,7 @@ impl Desk {
                     self.link_form = Some(crate::browse::OpenForm::new(&s.url, &s.open));
                 }
             }
+            Key::Char('s') if self.file.link.is_some() => self.open_send(),
             Key::Char('x') => self.show_hex = !self.show_hex,
             Key::Char('i') => self.show_types = !self.show_types,
             // E — включить/выключить transform-код, не стирая его (правка — F4).
@@ -3587,6 +3596,58 @@ impl Desk {
             .as_ref()
             .or(self.file.link.as_deref())
             .map(|l| l.status())
+    }
+
+    /// `s` у линка: форма отправки — копия выбранного сообщения, без него —
+    /// первый тип схемы со значениями по умолчанию (`agr:link-post`). Канал,
+    /// который сообщений не принимает, — отказ в строке состояния.
+    pub fn open_send(&mut self) {
+        let Some(s) = self.link_status() else { return };
+        match s.post {
+            Some(true) => {}
+            Some(false) => {
+                self.status = "линк не принимает сообщения: канал только читает".into();
+                return;
+            }
+            None => {
+                self.status = format!("линк ещё не готов: {}", s.line());
+                return;
+            }
+        }
+        self.send_form = Some(match self.selected() {
+            Some(r) => crate::send::SendForm::new(&self.file.scheme, &r.name, r.seq, Some(&r.data)),
+            None => {
+                let first = self.file.scheme.messages().next().map(|m| m.name.clone());
+                crate::send::SendForm::new(&self.file.scheme, &first.unwrap_or_default(), 0, None)
+            }
+        });
+    }
+
+    /// Клавиша формы отправки: Enter шлёт в линк, отказ остаётся в форме.
+    fn send_key(&mut self, k: Key) {
+        use crate::send::SendAction;
+        let scheme = self.file.scheme.clone();
+        let Some(f) = self.send_form.as_mut() else {
+            return;
+        };
+        match f.key(k, &scheme) {
+            Some(SendAction::Send(m)) => {
+                let what = format!("{} seq {}", f.name(), m.seq);
+                let sent = match self.link_next.as_ref().or(self.file.link.as_deref()) {
+                    Some(l) => l.post(m),
+                    None => Err("это файл, а не линк".into()),
+                };
+                match sent {
+                    Ok(()) => {
+                        self.send_form = None;
+                        self.status = format!("отправлено {what}");
+                    }
+                    Err(e) => f.error = Some(e),
+                }
+            }
+            Some(SendAction::Cancel) => self.send_form = None,
+            None => {}
+        }
     }
 
     /// `r` у линка: переподключить его в тот же спул, дописывая за последним

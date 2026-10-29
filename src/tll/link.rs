@@ -325,6 +325,22 @@ pub fn preload(ctx: &Context, url: &str) -> Result<(), String> {
     }
 }
 
+/// Принимает ли канал `c` сообщения: у прокси — его дочерний.
+unsafe fn posts(c: *mut tll_channel_t) -> bool {
+    let internal = (*c).internal;
+    if internal.is_null() {
+        return false;
+    }
+    let caps = (*internal).caps;
+    if caps & TLL_CAPS_PROXY != 0 {
+        let l = tll_channel_children(c);
+        if !l.is_null() && !(*l).channel.is_null() {
+            return posts((*l).channel);
+        }
+    }
+    caps & (TLL_CAPS_INPUT | TLL_CAPS_OUTPUT) != TLL_CAPS_INPUT
+}
+
 impl DriverLink for Link {
     fn poll(&mut self, timeout: Duration) -> Vec<LinkEvent> {
         let until = Instant::now() + timeout;
@@ -361,6 +377,19 @@ impl DriverLink for Link {
 
     fn history(&self) -> bool {
         self.pump.online.is_some()
+    }
+
+    /// Канал принимает сообщения (`agr:link-post`): не только читает. Caps
+    /// направления libtll ставит из `dir`; без него их нет вовсе, а `post`
+    /// работает (так шлётся запрос resolve), — отказ только у Input без
+    /// Output. Префикс (`lua+`, `resolve://`) шлёт в дочерний — его и смотрим.
+    fn can_post(&self) -> bool {
+        unsafe { posts(self.ch) }
+    }
+
+    fn post(&mut self, m: &Msg) -> Result<(), String> {
+        log::take();
+        Link::post(self, m).map_err(|e| log::take().map(|l| log::explain(&l)).unwrap_or(e))
     }
 }
 
