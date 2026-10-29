@@ -95,6 +95,7 @@ pub fn parse(s: &Scheme, m: &Msg) -> Option<BrowseEvent> {
                 })
                 .collect(),
             messages: None,
+            url: None,
         })),
         "DropChannel" => Some(BrowseEvent::DropChannel {
             service: text("service"),

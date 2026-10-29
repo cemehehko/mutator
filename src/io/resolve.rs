@@ -10,7 +10,10 @@
 //!
 //! [`Entry`] — экспорт, разобранный в колонки: `proto` и адрес — из `init.*`
 //! (url клиента, как его собирает `tll-resolve-browse`), схема — хеш или url,
-//! число её сообщений — если тело пришло в `scheme.<hash>`.
+//! число её сообщений — если тело пришло в `scheme.<hash>`. Бэкенд, у которого
+//! сервер шлёт url клиента целиком ([`Export::url`]), отдаёт его как есть:
+//! колонки разбираются из самого url, схема — его `schema`/`scheme` или
+//! `scheme` из `config`.
 //!
 //! Наружу: [`Browser`], [`Snapshot`], [`Entry`], [`Export`], [`BrowseEvent`],
 //! [`DriverBrowse`], [`RETRY`].
@@ -35,6 +38,9 @@ pub struct Export {
     pub config: Vec<(String, String)>,
     /// Сообщений в схеме, если её тело пришло.
     pub messages: Option<usize>,
+    /// Url клиента целиком, если сервер прислал его готовым; иначе url
+    /// собирается из `init.*`.
+    pub url: Option<String>,
 }
 
 impl Export {
@@ -130,6 +136,9 @@ pub struct Entry {
 
 impl Entry {
     pub fn new(e: &Export) -> Entry {
+        if let Some(url) = &e.url {
+            return Entry::direct(e, url);
+        }
         let params = e.params();
         let get = |key: &str| {
             params
@@ -167,6 +176,40 @@ impl Entry {
             messages: e.messages,
             params: rest.join("; "),
             url,
+        }
+    }
+
+    /// Строка по готовому url `proto://адрес;k=v;…`: схема — параметр
+    /// `schema`/`scheme`, а нет его — `scheme` из `config` (хеш).
+    fn direct(e: &Export, url: &str) -> Entry {
+        let (proto, rest) = url.split_once("://").unwrap_or(("", url));
+        let mut parts = rest.split(';').filter(|s| !s.is_empty());
+        let addr = parts.next().unwrap_or_default().to_string();
+        let mut scheme = String::new();
+        let mut rest = Vec::new();
+        for p in parts {
+            match p.split_once('=') {
+                Some(("schema" | "scheme", v)) => scheme = v.to_string(),
+                _ => rest.push(p.to_string()),
+            }
+        }
+        if scheme.is_empty() {
+            scheme = e.param("scheme").unwrap_or_default().to_string();
+        }
+        if let Some(h) = scheme.strip_prefix("sha256://") {
+            scheme = format!("sha256:{}", h.get(..8).unwrap_or(h));
+        }
+        Entry {
+            service: e.service.clone(),
+            channel: e.channel.clone(),
+            tags: e.tags.clone(),
+            host: e.host.clone(),
+            proto: proto.to_string(),
+            addr,
+            scheme,
+            messages: e.messages,
+            params: rest.join("; "),
+            url: url.to_string(),
         }
     }
 
@@ -462,6 +505,33 @@ mod tests {
         // Без `init.` (так шлют тесты libtll) — ключи как есть.
         let bare = Entry::new(&export("s", "a", &[("tll.proto", "tcp")]));
         assert_eq!(bare.proto, "tcp");
+    }
+
+    /// `agr:resolve-browse` — экспорт с готовым url (так шлёт сервер другого
+    /// бэкенда): колонки — из самого url, схема — его `schema`, а без неё —
+    /// короткий хеш из `config`; url остаётся как пришёл.
+    #[test]
+    fn export_with_ready_url_keeps_it() {
+        let mut e = export("aggr", "online", &[]);
+        e.host = "node-05".into();
+        e.url = Some("zmtp://node-05:6241;af=ipv4;schema=yaml://aggr/aggr.yaml;type=sub".into());
+        let en = Entry::new(&e);
+        assert_eq!(
+            (en.proto.as_str(), en.addr.as_str(), en.scheme.as_str()),
+            ("zmtp", "node-05:6241", "yaml://aggr/aggr.yaml")
+        );
+        assert_eq!(en.params, "af=ipv4; type=sub");
+        assert_eq!(en.url, e.url.clone().unwrap());
+        assert_eq!(en.link(), "resolve://aggr/online");
+
+        let mut e = export("aggr", "merger", &[("scheme", "sha256://5dae596597f62fcb")]);
+        e.url = Some("replay+tcp://node-05:9000;mode=client".into());
+        let en = Entry::new(&e);
+        assert_eq!(
+            (en.proto.as_str(), en.scheme.as_str()),
+            ("replay+tcp", "sha256:5dae5965")
+        );
+        assert_eq!(en.params, "mode=client");
     }
 
     /// `agr:resolve-browse` — подписка: Active сбрасывает старый список,
