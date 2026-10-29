@@ -18,6 +18,7 @@ Description: TUI viewer and editor for TLL data files (terminal only).
  or in place with a backup.
  .
  This build provides only the terminal (TUI) interface and
- non-interactive dump mode. No GUI dependencies.
+ non-interactive dump mode. No GUI dependencies. `mutator --serve ADDR`
+ starts a read-only HTTP server (REST + SSE) for testers.
  .
  See also: tll-read(1).

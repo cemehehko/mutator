@@ -32,6 +32,7 @@ recent.rs 90
 spec.rs 96
 edit/ 95
 agent/ 62
+serve/ 75
 markup.rs 99
 ui/ 75
 "

@@ -21,14 +21,15 @@ agrs=$(awk '
   /^- `agr:[a-z0-9-]+`/ { match($0, /agr:[a-z0-9-]+/); print substr($0, RSTART + 4, RLENGTH - 4) }
 ' ARCHITECTURE.md)
 
-# Тесты договорённостей: метка agr: в трёх строках над #[test] (как trace.sh).
+# Тесты договорённостей: метка agr: в трёх строках над #[test] или
+# #[tokio::test] (как trace.sh).
 tests=$(find src tests -name '*.rs' -print0 | sort -z | xargs -0 awk '
   function flush() { for (k = 1; k <= n; k++) if (pend[k] != "") print pend[k]; n = 0 }
   FNR == 1 { flush() }
   {
     for (k = 1; k <= n; k++) {
       if (pend[k] == "") continue
-      if ($0 ~ /#\[test\]/) { print pend[k]; pend[k] = "" }
+      if ($0 ~ /#\[(tokio::)?test[](]/) { print pend[k]; pend[k] = "" }
       else if (FNR - at[k] >= 3) pend[k] = ""
     }
     line = $0

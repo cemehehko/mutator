@@ -50,6 +50,9 @@ use crate::range::Border;
 use crate::scheme::{Kind, Sub};
 use crate::session::Session;
 
+/// Хвост растущего спула — не чаще (`agr:link-tail`).
+const TAIL_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Клавиша от любого вида.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -510,6 +513,9 @@ pub struct Desk {
     forecast_id: u64,
     /// seq после записи (`agr:seq-forecast`).
     seq_map: SeqMap,
+    /// Вид только смотрит, как у линка: правка и фиксация — отказ. Так вид
+    /// держит сервер для браузера (`agr:serve-view-desk`).
+    pub view_only: bool,
     notify: Arc<dyn Fn() + Send + Sync>,
     /// Канал действий агента: агент не трогает состояние сам, а просит
     /// (`agr:agent-same-desk`). `None` — вид уже отдал приёмник другому `Desk`
@@ -530,6 +536,8 @@ pub struct Desk {
     link_seen: Option<LinkStatus>,
     /// Последний seq спула, о котором воркер уже спрошен ([`Cmd::Tail`]).
     tail_sent: Option<i64>,
+    /// Когда спрошен.
+    tail_at: std::time::Instant,
 }
 
 impl Desk {
@@ -655,6 +663,7 @@ impl Desk {
             mass_edit: None,
             help: Help::default(),
             mass_pairs: None,
+            view_only: false,
             scan_id: 0,
             scan_pending: false,
             reopen: None,
@@ -671,6 +680,7 @@ impl Desk {
             link_next: None,
             link_seen: None,
             tail_sent: None,
+            tail_at: std::time::Instant::now() - TAIL_EVERY,
         };
         d.jump(At::Seq(i64::MIN), None);
         d
@@ -1852,6 +1862,7 @@ impl Desk {
         // иначе `jump(At::End)` рассчитает `top`/`sel` не по той высоте.
         let height = self.height;
         let detail_height = self.detail_height;
+        let view_only = self.view_only;
         self.file_gen
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *self = Desk::open_with(
@@ -1863,6 +1874,8 @@ impl Desk {
         );
         self.height = height;
         self.detail_height = detail_height;
+        // Вид, который только смотрит, и после перечитывания только смотрит.
+        self.view_only = view_only;
         self.restore(&keep);
         if let Some(l) = land {
             // Встать на новую последнюю строку: то же, что обычный `End`, но
@@ -3495,6 +3508,7 @@ impl Desk {
         // растёт: правки агента по прежнему файлу вид отбросит (`agr:agent-gen`).
         self.file_gen
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let view_only = self.view_only;
         *self = Desk::open_with(
             file,
             self.notify.clone(),
@@ -3504,21 +3518,29 @@ impl Desk {
         );
         self.height = height;
         self.detail_height = detail_height;
+        self.view_only = view_only;
         self.restore(s);
     }
 }
 
 /// Линк: спул вместо файла, только просмотр, состояние всегда видно.
 impl Desk {
-    /// Открыт линк — только просмотр (`agr:link-read-only`).
+    /// Открыт линк или вид только смотрит — только просмотр
+    /// (`agr:link-read-only`, `agr:serve-view-desk`).
     pub fn read_only(&self) -> bool {
-        self.file.link.is_some()
+        self.file.link.is_some() || self.view_only
     }
 
-    /// Правка у линка — отказ с причиной в строке состояния.
+    /// Правка у линка или вида только для просмотра — отказ с причиной в
+    /// строке состояния.
     fn deny_edit(&mut self) -> bool {
         if self.read_only() {
-            self.status = "линк — только просмотр: правки и фиксация недоступны".into();
+            let who = if self.file.link.is_some() {
+                "линк"
+            } else {
+                "вид"
+            };
+            self.status = format!("{who} — только просмотр: правки и фиксация недоступны");
         }
         self.read_only()
     }
@@ -3584,9 +3606,15 @@ impl Desk {
             return changed;
         };
         let s = l.status();
-        if s.last > self.file.info.seq_last && self.tail_sent != s.last {
-            // Спул подрос: воркер дочитает границы, индекс и фильтр.
+        if s.last > self.file.info.seq_last
+            && self.tail_sent != s.last
+            && self.tail_at.elapsed() >= TAIL_EVERY
+        {
+            // Спул подрос: воркер дочитает границы, индекс и фильтр. Не чаще
+            // [`TAIL_EVERY`]: история льётся потоком, а вид, которого будит
+            // каждый ответ воркера, спрашивал бы хвост без передышки.
             self.tail_sent = s.last;
+            self.tail_at = std::time::Instant::now();
             self.worker.send(Cmd::Tail);
         }
         if self.link_seen.as_ref() != Some(&s) {

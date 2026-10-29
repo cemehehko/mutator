@@ -1,6 +1,6 @@
 [package]
 name = "tll-mutator"
-version = "0.0.14"
+version = "0.0.16"
 edition = "2021"
 description = "Просмотр датников TLL: таблица сообщений, фильтр, поиск — в окне и в терминале"
 
@@ -20,6 +20,13 @@ tll = []
 # GUI (окно egui + TUI-в-окне по F2). Выключайте для сборки только TUI
 # (--tui) и --dump на серверах без X11/Wayland/Vulkan (Ubuntu 20.04+ headless).
 gui = ["dep:eframe"]
+# Сервер для тестировщиков: читающие инструменты агента по REST и SSE
+# (`--serve ADDR`). Сам по себе ни окна, ни терминала не тянет.
+rest = ["dep:axum", "tokio/rt-multi-thread", "tokio/net", "tokio/signal"]
+# MCP поверх тех же операций: streamable HTTP на `/mcp` (с токеном) и stdio.
+mcp = ["rest", "dep:rmcp"]
+# Веб-UI на `/`: одна страница `web/index.html` в бинаре, без сборки.
+wui = ["rest"]
 
 [dependencies]
 # Библиотеки бэкендов грузятся при открытии файла своего формата.
@@ -44,6 +51,14 @@ futures-util = "0.3"
 eventsource-stream = "0.2"
 # Тело запросов и ответов LLM, схемы инструментов.
 serde_json = "1"
+# Сервер (фича `rest`): HTTP и SSE.
+axum = { version = "0.8", optional = true }
+# MCP (фича `mcp`): сервер, streamable HTTP и stdio.
+rmcp = { version = "3.8", optional = true, default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+    "transport-io",
+] }
 
 # Общие типы цветов/шрифтов из egui используются и в TUI (терминал),
 # и в окне. Само eframe (с wgpu) тянется только при фиче "gui".
@@ -66,6 +81,12 @@ rfd = "0.17"
 [dev-dependencies]
 # Эталоны python-tll лежат в JSON (`tests/data/*.json`).
 serde_json = "1"
+# Клиент MCP для `tests/mcp.rs`: HTTP и stdio дочернего процесса.
+rmcp = { version = "3.8", default-features = false, features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+    "transport-child-process",
+] }
 
 [build-dependencies]
 # libtll ставится системно (Homebrew, deb); путь берём у pkg-config.
@@ -106,6 +127,21 @@ required-features = ["tll"]
 name = "link"
 path = "tests/link.rs"
 required-features = ["tll"]
+
+[[test]]
+name = "mcp"
+path = "tests/mcp.rs"
+required-features = ["mcp", "tll"]
+
+[[test]]
+name = "serve"
+path = "tests/serve.rs"
+required-features = ["rest", "tll"]
+
+[[test]]
+name = "view"
+path = "tests/view.rs"
+required-features = ["wui", "tll"]
 
 [[test]]
 name = "tui"

@@ -7,12 +7,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-budgets="SCENARIOS.md 28
-MANUAL.md 38
-REQUIREMENTS.md 150
-README.md 90
-ARCHITECTURE.md 390
-AGENTS.md 70"
+budgets="SCENARIOS.md 30
+MANUAL.md 55
+REQUIREMENTS.md 170
+README.md 95
+ARCHITECTURE.md 450
+AGENTS.md 95"
 
 fail=0
 while read -r f n; do

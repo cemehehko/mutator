@@ -23,7 +23,8 @@ override_dh_auto_configure:
 override_dh_auto_build:
 	# TUI only: do not pull eframe/wgpu GUI stack, keep the built-in TLL backend.
 	# This lets the package build on a headless builder without X11/Wayland/Vulkan dev packages.
-	cargo build --release --no-default-features --features tll
+	# mcp и wui (с rest) — сервер для тестировщиков: --serve, /mcp, --mcp-stdio, веб-UI.
+	cargo build --release --no-default-features --features tll,mcp,wui
 
 override_dh_auto_test:
 	# Packaging builds often run in restricted envs; run tests only if explicitly wanted.

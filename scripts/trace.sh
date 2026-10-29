@@ -27,7 +27,7 @@ marks=$(find src tests -name '*.rs' -print0 | sort -z | xargs -0 awk '
   {
     for (k = 1; k <= n; k++) {
       if (pend[k] == "") continue
-      if ($0 ~ /#\[test\]/) { print pend[k], "test"; pend[k] = "" }
+      if ($0 ~ /#\[(tokio::)?test[](]/) { print pend[k], "test"; pend[k] = "" }
       else if (FNR - at[k] >= 3) { print pend[k], "code"; pend[k] = "" }
     }
     line = $0

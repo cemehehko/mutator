@@ -565,6 +565,7 @@ fn run(
     while let Ok(first) = rx.recv() {
         let mut batch = vec![first];
         batch.extend(rx.try_iter());
+        tail_last(&mut batch);
         let newest = batch
             .iter()
             .filter_map(|c| match c {
@@ -835,6 +836,16 @@ fn run(
 
 /// Индекс с хвостом спула за его прежним концом; индекса ещё нет — `None`:
 /// вид попросит хвост снова, когда индекс придёт (`agr:link-tail`).
+/// Хвост растущего спула — один на пачку и после окна: пока линк качает
+/// историю, `Tail` идут потоком, и дочитка окна по `PgDn` не должна ждать
+/// каждого (`agr:link-tail`).
+fn tail_last(batch: &mut Vec<Cmd>) {
+    if batch.iter().any(|c| matches!(c, Cmd::Tail)) {
+        batch.retain(|c| !matches!(c, Cmd::Tail));
+        batch.push(Cmd::Tail);
+    }
+}
+
 fn tail_index(file: &File, slot: &Mutex<Option<Arc<Index>>>) -> Option<Arc<Index>> {
     let cur = slot.lock().unwrap().clone()?;
     let from = cur.last.map_or(file.begin(), |l| l + 1);
@@ -1254,5 +1265,51 @@ fn extend(
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Поток `Tail` от растущего линка не держит окно: в пачке хвост один и
+    /// идёт после окна и дочитки.
+    /// `agr:link-tail`
+    #[test]
+    fn a_burst_of_tails_runs_once_after_the_window() {
+        let ext = || Cmd::Extend {
+            gen: 1,
+            view: View::All,
+            after: true,
+            edge: Edge { seq: 10, row: None },
+            n: 8,
+        };
+        let mut batch = vec![
+            Cmd::Tail,
+            Cmd::Tail,
+            ext(),
+            Cmd::Tail,
+            Cmd::Window {
+                gen: 2,
+                view: View::All,
+                at: At::Seq(5),
+                n: 8,
+            },
+            Cmd::Tail,
+        ];
+        tail_last(&mut batch);
+        let kinds: Vec<&str> = batch
+            .iter()
+            .map(|c| match c {
+                Cmd::Tail => "tail",
+                Cmd::Extend { .. } => "extend",
+                Cmd::Window { .. } => "window",
+                _ => "?",
+            })
+            .collect();
+        assert_eq!(kinds, ["extend", "window", "tail"]);
+        let mut calm = vec![ext()];
+        tail_last(&mut calm);
+        assert_eq!(calm.len(), 1, "без хвоста — как было");
     }
 }

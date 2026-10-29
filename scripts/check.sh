@@ -55,17 +55,17 @@ docker run --rm \
       echo "== $step"
       case $step in
         fmt)    rustup component add rustfmt >/dev/null 2>&1; cargo fmt --check ;;
-        clippy) rustup component add clippy >/dev/null 2>&1; cargo clippy --all-targets -q -- -D warnings ;;
-        test)   cargo test -q -j 1 ;;
+        clippy) rustup component add clippy >/dev/null 2>&1; cargo clippy --all-targets --features mcp,wui -q -- -D warnings ;;
+        test)   cargo test -q -j 1 --features mcp,wui ;;
         doc)    RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
-                  cargo doc --lib --no-deps --document-private-items -q ;;
+                  cargo doc --lib --no-deps --document-private-items --features mcp,wui -q ;;
         cov)    rustup component add llvm-tools-preview >/dev/null 2>&1
                 command -v cargo-llvm-cov >/dev/null || curl -sSfL \
                   "https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-$(uname -m)-unknown-linux-gnu.tar.gz" \
                   | tar xz -C /usr/local/cargo/bin
                 # По одной сборке за раз: параллельная линковка инструментированного
                 # окна съедает память VM и линкер гибнет по OOM.
-                CARGO_BUILD_JOBS=1 cargo llvm-cov --summary-only 2>/dev/null | scripts/cover.sh ;;
+                CARGO_BUILD_JOBS=1 cargo llvm-cov --features mcp,wui --summary-only 2>/dev/null | scripts/cover.sh ;;
         *)      echo "неизвестный шаг: $step" >&2; exit 2 ;;
       esac
     done

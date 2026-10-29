@@ -8,7 +8,8 @@
 //! [`edit`] — правки полей и состава потока, запись по схеме и фиксация,
 //! [`lua_highlight`] — подсветка синтаксиса Lua для редактора transform-кода,
 //! [`markup`] — разметка ответа модели, общая для окна и TUI,
-//! [`agent`] — диалог с моделью: чтение датника инструментами и сборка Lua-фильтра.
+//! [`agent`] — диалог с моделью: чтение датника инструментами и сборка Lua-фильтра,
+//! `serve` — сервер для тестировщиков: инструменты агента по REST и SSE (фича `rest`).
 
 pub mod agent;
 pub mod app;
@@ -25,6 +26,8 @@ pub mod markup;
 pub mod range;
 pub mod recent;
 pub mod scheme;
+#[cfg(feature = "rest")]
+pub mod serve;
 pub mod session;
 pub mod spec;
 #[cfg(feature = "tll")]

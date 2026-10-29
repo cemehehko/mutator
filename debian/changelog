@@ -1,3 +1,29 @@
+tll-mutator (0.0.16+ubuntu20.04) unstable; urgency=medium
+
+  * Сервер снаружи — только с токеном: --token (MUTATOR_TOKEN) закрывает весь
+    сервер — REST, SSE, страницу, MCP; браузер входит ссылкой /?token=…; без
+    токена сервер слушает только loopback.
+  * --backend работает и для --serve и --mcp-stdio.
+  * Линк, к которому обратились одновременно, открывается один раз.
+  * Веб: два быстрых «Открыть» не оставляют чужой вид; в op_started — файл,
+    что реально читается.
+
+ -- Andrew <cemehehko@mail.ru>  Tue, 27 Oct 2026 15:00:00 +0300
+
+tll-mutator (0.0.15+ubuntu20.04) unstable; urgency=medium
+
+  * Сервер для тестировщиков (--serve ADDR): читающие инструменты агента по
+    REST, долгие сканы, найденное поиском и линки — событиями SSE; правок нет.
+  * MCP: /mcp с --mcp-token (или MCP_TOKEN), --mcp-stdio для Claude Desktop.
+  * Веб-UI на /: тот же просмотрщик, что --tui, свой на вкладку; страница API.
+  * Границу детали тянут мышью — в терминале и в браузере.
+  * Пока линк качает историю, окно дочитывается сразу.
+  * search_messages: bodies — найденные с полями; сервер отдаёт найденное по
+    мере скана.
+  * schema_fields: вложенные поля деревом с путями, все значения enum и bits.
+
+ -- Andrew <cemehehko@mail.ru>  Tue, 27 Oct 2026 12:00:00 +0300
+
 tll-mutator (0.0.14+ubuntu20.04) unstable; urgency=medium
 
   * Любой линк TLL вместо файла (resolve://, stream+, lua+…): только просмотр,

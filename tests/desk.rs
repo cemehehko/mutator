@@ -1386,3 +1386,40 @@ fn end_from_middle_stays_within_the_open_snapshot() {
         "перечитывания не было"
     );
 }
+
+/// `agr:serve-view-desk` — вид, который только смотрит, остаётся таким и после
+/// перечитывания растущего файла (`r` пересоздаёт вид).
+#[test]
+fn a_view_only_desk_stays_view_only_after_reload() {
+    use tui_patch::io::{Info, Msg, Writer};
+
+    let dir = std::env::temp_dir().join(format!("mutator-viewonly-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("growing.current.dat");
+    std::fs::copy(fixture("plain"), &path).unwrap();
+    let mut d = Desk::open(File::open(&path).unwrap(), Arc::new(|| {}));
+    d.view_only = true;
+    settle(&mut d);
+
+    let f = File::open(&path).unwrap();
+    let info: Info = f.info.clone();
+    let last = *all_seqs(&path).last().unwrap();
+    let ctx = Context::new();
+    let mut w = Writer::open(&ctx, &path, &f.scheme_url.clone().unwrap(), &info, false).unwrap();
+    w.post(&Msg {
+        seq: last + 1,
+        msgid: 30,
+        data: vec![0; 4],
+    })
+    .unwrap();
+    drop(w);
+
+    key(&mut d, Key::Char('r'));
+    assert!(d.status.contains("перечитан"), "{}", d.status);
+    assert!(
+        d.view_only && d.read_only(),
+        "после перечитывания — только просмотр"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

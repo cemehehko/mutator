@@ -145,6 +145,8 @@ fn drive(
     let mut agent = crate::ui::agent::State::new();
     let mut agent_look = false;
     let mut lua_look = false;
+    // Тянут границу детали: от нажатия на неё до отпускания.
+    let mut splitting = false;
     loop {
         d.poll();
         agent.poll(&events);
@@ -246,11 +248,11 @@ fn drive(
                                 crate::ui::agent::apply(&mut agent, &cmd, a);
                             }
                         }
-                        Frame::Desk(g) => {
-                            if let Some(a) = g.act_at(m.row as usize, m.column as usize) {
-                                super::apply(d, a);
-                            }
-                        }
+                        Frame::Desk(g) => match g.act_at(m.row as usize, m.column as usize) {
+                            Some(super::Act::Split) => splitting = true,
+                            Some(a) => super::apply(d, a),
+                            None => {}
+                        },
                         Frame::Lua(g) => {
                             // Щелчок по коду — курсор в место тыка
                             // (слева — поле номеров строк).
@@ -264,6 +266,10 @@ fn drive(
                             }
                         }
                     },
+                    MouseEventKind::Drag(MouseButton::Left) if splitting => {
+                        super::split_at(d, rows, m.row as usize);
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => splitting = false,
                     MouseEventKind::ScrollDown => {
                         if agent_look {
                             agent.scroll_by(-3);

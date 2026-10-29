@@ -15,7 +15,7 @@
 //! У линка в заголовке справа — его состояние ([`link_line`], `agr:link-state`):
 //! видно всегда, цветом по состоянию; тот же значок — в строке состояния окна.
 //!
-//! Ещё: [`group`], [`title`], [`apply`], [`link_line`].
+//! Ещё: [`group`], [`title`], [`apply`], [`link_line`], [`split_at`].
 
 pub mod grid;
 pub mod term;
@@ -41,6 +41,8 @@ pub enum Act {
     /// Пункт списка выбора (номер среди видимых).
     Pick(usize),
     Key(Key),
+    /// Граница таблицы и детали: её тянут мышью ([`split_at`]), щелчок — ничего.
+    Split,
 }
 
 /// Строка «12 345 678» — разряды пробелом.
@@ -150,10 +152,10 @@ const WRAP: usize = 6;
 const HELP: &str = "↑↓ PgUp/PgDn Home/End  Enter деталь  x hex  i типы полей  f фильтр  t типы  / ? поиск  n/N  g переход  c колонки  p пресет  e правка  E transform вкл/выкл  F4 код Lua  w зафиксировать  { } высота детали  q выход";
 
 /// Нарисовать экран `cols`×`rows`; заодно задать высоты таблицы и детали.
-pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
-    let mut g: Grid<Act> = Grid::new(cols);
-    let rows = rows.max(6);
-    let line_prompt = d.prompt.as_ref().is_some_and(|p| {
+/// Строка ввода внизу экрана: у всех подсказок, кроме списков выбора поверх
+/// таблицы.
+fn line_prompt(d: &Desk) -> bool {
+    d.prompt.as_ref().is_some_and(|p| {
         !matches!(p.kind, PromptKind::Types | PromptKind::Columns)
             || matches!(
                 p.kind,
@@ -162,9 +164,31 @@ pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
                     ..
                 }
             )
-    });
-    let fixed = 3 + line_prompt as usize;
-    let avail = rows.saturating_sub(fixed).max(3);
+    })
+}
+
+/// Строк на таблицу и деталь вместе: экран без заголовка, шапки, состояния и
+/// строки ввода.
+fn avail_rows(d: &Desk, rows: usize) -> usize {
+    let fixed = 3 + line_prompt(d) as usize;
+    rows.max(6).saturating_sub(fixed).max(3)
+}
+
+/// Граница детали перетащена на строку экрана `row` (экран `rows` строк):
+/// доля детали — от этой строки до низа, как у окна, тянущего панель
+/// (`agr:detail-share`).
+pub fn split_at(d: &mut Desk, rows: usize, row: usize) {
+    let avail = avail_rows(d, rows);
+    let table = row.saturating_sub(2).clamp(1, avail);
+    d.detail_ratio = ((avail - table) as f32 / avail as f32).clamp(0.05, 0.8);
+    d.status = format!("высота детали: {:.0}%", d.detail_ratio * 100.0);
+}
+
+pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
+    let mut g: Grid<Act> = Grid::new(cols);
+    let rows = rows.max(6);
+    let line_prompt = line_prompt(d);
+    let avail = avail_rows(d, rows);
     let detail = if d.detail_open {
         let n = (avail as f32 * d.detail_ratio).round() as usize;
         n.clamp(2, avail.saturating_sub(1))
@@ -262,6 +286,7 @@ pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
     let mut y = 2 + table;
     if detail > 0 {
         draw_detail(&mut g, d, y, cols, detail);
+        g.link(y, 0, cols, Act::Split);
         y += detail;
     }
 
@@ -695,12 +720,46 @@ pub fn apply(d: &mut Desk, a: Act) {
             d.key(Key::Char(' '));
         }
         Act::Key(k) => d.key(k),
+        // Границу тянут, а не щёлкают: см. [`split_at`].
+        Act::Split => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Границу детали тянут мышью: где отпустили — там и граница, доля — в
+    /// пределах, что у `{`/`}`.
+    /// `agr:detail-share`
+    #[test]
+    fn dragging_the_detail_border_sets_its_share() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/plain.dat");
+        let Ok(file) = crate::data::File::open(&path) else {
+            return;
+        };
+        let mut d = Desk::open(file, std::sync::Arc::new(|| {}));
+        d.detail_open = true;
+        let g = frame(&mut d, 80, 40);
+        let border = (0..g.rows())
+            .find(|&r| g.act_at(r, 5) == Some(Act::Split))
+            .expect("граница");
+        split_at(&mut d, 40, border - 10);
+        assert!(
+            d.detail_ratio > 0.3,
+            "выше — деталь больше: {}",
+            d.detail_ratio
+        );
+        let g = frame(&mut d, 80, 40);
+        let moved = (0..g.rows())
+            .find(|&r| g.act_at(r, 5) == Some(Act::Split))
+            .unwrap();
+        assert_eq!(moved, border - 10, "граница там, где отпустили");
+        split_at(&mut d, 40, 0);
+        assert_eq!(d.detail_ratio, 0.8);
+        split_at(&mut d, 40, 100);
+        assert_eq!(d.detail_ratio, 0.05);
+    }
 
     /// Разряды числа отделяются пробелом.
     #[test]

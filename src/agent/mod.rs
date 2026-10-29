@@ -28,7 +28,8 @@
 //! Наружу: [`Cmd`], [`CmdTx`], [`Ev`], [`DialogView`], [`MsgView`], [`Act`],
 //! [`ActTx`], [`ToolCtx`], [`LuaView`], [`start`], [`Settings`], [`Dialog`],
 //! [`Msg`], [`CallReq`], [`Store`], [`UNTITLED`], [`build_tools`],
-//! [`needs_confirm`], [`build_system`], [`Snap`].
+//! [`needs_confirm`], [`build_system`], [`Snap`]; `execute` и `search_each` — серверу
+//! (фича `rest`).
 
 mod llm;
 mod prompt;
@@ -39,6 +40,8 @@ mod trace;
 pub use prompt::build_system;
 pub use store::{CallReq, Dialog, Msg, Settings, Store, UNTITLED};
 pub use tools::{build_tools, needs_confirm};
+#[cfg(feature = "rest")]
+pub(crate) use tools::{execute, search_each};
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::SyncSender as Sender;
@@ -276,6 +279,30 @@ pub struct ToolCtx {
 }
 
 impl ToolCtx {
+    /// Контекст без вида: свой контекст чтения, ни действий, ни правок, ни
+    /// индекса — так инструменты зовут сервер (`agr:serve-same-tools`) и тесты.
+    pub fn detached(file: crate::data::File) -> ToolCtx {
+        ToolCtx {
+            file,
+            gen: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            patch: None,
+            ctx: crate::io::Context::new(),
+            total: None,
+            index: None,
+            acts: None,
+            edits: crate::edit::Edits::default(),
+            lua_code: String::new(),
+            lua_enabled: true,
+            debug: false,
+            filter: Filter::default(),
+            columns: Vec::new(),
+            sel_seq: None,
+            sel_row: None,
+            last_gen: 0,
+        }
+    }
+
     /// Что открывать для чтения: части с наложенными правками, если они есть.
     fn src(&self) -> Vec<crate::data::fetch::Src> {
         self.file.sources()

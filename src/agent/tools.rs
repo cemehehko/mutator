@@ -14,7 +14,7 @@
 //! Промпт и описания инструментов — по-английски: так модель устойчивее
 //! понимает схемы; ответы пользователю агент даёт по-русски.
 //!
-//! Наружу: [`build_tools`], [`execute`], [`needs_confirm`], [`prepare`],
+//! Наружу: [`build_tools`], [`execute`], [`search_each`], [`needs_confirm`], [`prepare`],
 //! [`apply_batch`], [`restore`], [`Batch`].
 //!
 //! Ещё: тестовый контекст `tests_ctx` на эталонном датнике.
@@ -58,12 +58,16 @@ pub fn build_tools() -> Vec<Value> {
         ),
         func(
             "schema_fields",
-            "Fields of a message type (name, type, offset, size, enum or bits values). \
+            "Fields of a message type as a tree: nested messages, array and list \
+             elements and union variants expanded, each with its full path \
+             (`header.status`, `groups[N].price`), type, offset, size, enum or bits \
+             values (first 12). `type` may also name a nested struct; an enum or bits \
+             name, or a field path `Type.path`, gives that field with all its values. \
              With no `type`, lists the message types and their field counts.",
             json!({
                 "type": "object",
                 "properties": {
-                    "type": { "type": "string", "description": "Message type name or msgid" }
+                    "type": { "type": "string", "description": "Message type name or msgid, nested struct name, enum/bits name, or field path Type.path" }
                 }
             }),
         ),
@@ -106,13 +110,19 @@ pub fn build_tools() -> Vec<Value> {
             "search_messages",
             "Find messages matching a Lua expression, forward from `from`. The \
              expression sees seq, name, data, msgid, addr, time. Returns seq and type \
-             of the first matches, not the bodies.",
+             of the first matches; with `bodies`, their fields too, as read_messages.",
             json!({
                 "type": "object",
                 "properties": {
                     "expr": { "type": "string", "description": "Lua boolean expression" },
                     "from": { "type": "integer", "description": "First seq to scan (default: first in the file)" },
-                    "count": { "type": "integer", "description": "How many matches, up to 50 (default 10)" }
+                    "count": { "type": "integer", "description": "How many matches, up to 50 (default 10)" },
+                    "bodies": { "type": "boolean", "description": "Also return each match's fields (default false)" },
+                    "fields": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "With bodies: only these field paths (default all)"
+                    }
                 },
                 "required": ["expr"]
             }),
@@ -447,37 +457,169 @@ fn fields(ctx: &ToolCtx, ty: Option<&str>) -> Result<String, String> {
         }
         return Ok(out);
     };
-    let msg = match ty.parse::<i32>().ok().and_then(|id| s.message(id)) {
-        Some(m) => m,
-        None => s
-            .messages()
-            .find(|m| m.name == ty)
-            .ok_or_else(|| format!("нет типа {ty}"))?,
+    // Тип — сообщение по msgid или имени, или вложенная структура по имени.
+    let found = match ty.parse::<i32>().ok().and_then(|id| s.message(id)) {
+        Some(m) => Some(m),
+        None => s.structs.iter().find(|m| m.name == ty),
     };
-    let mut out = format!("{}: {} bytes\n", msg.name, msg.size);
+    let Some(msg) = found else {
+        // Поле по пути (`DOMUpdate.params.update_type`) или enum/bits по имени —
+        // со всеми значениями, без обрезки.
+        let f = match ty.split_once('.') {
+            Some((m, path)) => field_at(s, m, path),
+            None => sub_named(s, ty),
+        };
+        let f = f.ok_or_else(|| {
+            format!(
+                "нет типа, поля или enum/bits {ty} (поле — Тип.путь, например Order.header.status)"
+            )
+        })?;
+        let mut out = format!("{ty} : {} @{}+{}\n", f.type_name(s), f.offset, f.size);
+        values(f, "  ", usize::MAX, &mut out);
+        if out.lines().count() == 1 {
+            sub_tree(s, f, ty, 0, &mut out);
+        }
+        return Ok(out);
+    };
+    let mut out = format!(
+        "{}: {} bytes; path : type @offset+size (offset — в своей структуре)\n",
+        msg.name, msg.size
+    );
     if let Some(pmap) = &msg.pmap {
         out.push_str(&format!("presence map: {pmap}\n"));
     }
-    for f in &msg.fields {
+    field_tree(s, &msg.fields, "", 1, &mut out);
+    Ok(out)
+}
+
+/// Поля деревом: вложенные сообщения, элементы массивов и списков, варианты
+/// объединений — с путями в формате tll-patch (`header.status`,
+/// `groups[N].price`), как их показывает деталь и адресует правка
+/// (`agr:patch-path`).
+fn field_tree(
+    s: &Scheme,
+    fields: &[crate::scheme::Field],
+    prefix: &str,
+    depth: usize,
+    out: &mut String,
+) {
+    // Схема не бывает такой глубокой; предел — от зацикленных ссылок.
+    if depth > 8 {
+        return;
+    }
+    let pad = "  ".repeat(depth);
+    for f in fields {
+        let path = format!("{prefix}{}", f.name);
         out.push_str(&format!(
-            "  {} : {} @{}+{}\n",
-            f.name,
+            "{pad}{path} : {} @{}+{}\n",
             f.type_name(s),
             f.offset,
             f.size
         ));
-        if let Kind::Int(_, crate::scheme::Sub::Enum(e)) = &f.kind {
-            for (name, v) in e.values.iter().take(12) {
-                out.push_str(&format!("      {v} = {name}\n"));
-            }
-        }
-        if let Kind::Int(_, crate::scheme::Sub::Bits(b)) = &f.kind {
-            for (name, off, w) in b.fields.iter().take(12) {
-                out.push_str(&format!("      bit {off}+{w} = {name}\n"));
-            }
-        }
+        sub_tree(s, f, &path, depth, out);
     }
-    Ok(out)
+}
+
+/// Значений больше показанных — сказать, сколько ещё и как увидеть все.
+fn more(n: usize, limit: usize, pad: &str, out: &mut String) {
+    if n > limit {
+        out.push_str(&format!(
+            "{pad}… ещё {} (все — schema_fields по имени enum/bits или пути поля)\n",
+            n - limit
+        ));
+    }
+}
+
+/// Значения enum и bits поля: не больше `limit`, за ними — сколько ещё.
+fn values(f: &crate::scheme::Field, pad: &str, limit: usize, out: &mut String) {
+    match &f.kind {
+        Kind::Int(_, crate::scheme::Sub::Enum(e)) => {
+            for (name, v) in e.values.iter().take(limit) {
+                out.push_str(&format!("{pad}{v} = {name}\n"));
+            }
+            more(e.values.len(), limit, pad, out);
+        }
+        Kind::Int(_, crate::scheme::Sub::Bits(b)) => {
+            for (name, off, w) in b.fields.iter().take(limit) {
+                out.push_str(&format!("{pad}bit {off}+{w} = {name}\n"));
+            }
+            more(b.fields.len(), limit, pad, out);
+        }
+        _ => {}
+    }
+}
+
+/// Поле по пути от сообщения или структуры `msg`: `params.update_type`,
+/// номера элементов (`[N]`, `[3]`) не важны.
+fn field_at<'a>(s: &'a Scheme, msg: &str, path: &str) -> Option<&'a crate::scheme::Field> {
+    let mut fields = &s.structs.iter().find(|m| m.name == msg)?.fields;
+    let mut cur = None;
+    for part in path.split('.') {
+        let name = part.split('[').next().unwrap_or(part);
+        let f = fields.iter().find(|f| f.name == name)?;
+        cur = Some(f);
+        let inner = match &f.kind {
+            Kind::Array { elem, .. } | Kind::Pointer { elem, .. } => &elem.kind,
+            k => k,
+        };
+        fields = match inner {
+            Kind::Message(m) => &s.structs[*m].fields,
+            Kind::Union { variants, .. } => variants,
+            _ => fields,
+        };
+    }
+    cur
+}
+
+/// Поле с enum или bits по имени этого enum/bits — первое в схеме.
+fn sub_named<'a>(s: &'a Scheme, name: &str) -> Option<&'a crate::scheme::Field> {
+    fn walk<'a>(
+        fields: &'a [crate::scheme::Field],
+        name: &str,
+    ) -> Option<&'a crate::scheme::Field> {
+        fields.iter().find_map(|f| match &f.kind {
+            Kind::Int(_, crate::scheme::Sub::Enum(e)) if e.name == name => Some(f),
+            Kind::Int(_, crate::scheme::Sub::Bits(b)) if b.name == name => Some(f),
+            Kind::Array { elem, .. } | Kind::Pointer { elem, .. } => {
+                walk(std::slice::from_ref(elem), name)
+            }
+            Kind::Union { variants, .. } => walk(variants, name),
+            _ => None,
+        })
+    }
+    s.structs.iter().find_map(|m| walk(&m.fields, name))
+}
+
+/// Что внутри поля: значения enum и bits, поля вложенного сообщения,
+/// элемента массива или списка, варианты объединения.
+fn sub_tree(s: &Scheme, f: &crate::scheme::Field, path: &str, depth: usize, out: &mut String) {
+    let pad = "  ".repeat(depth + 2);
+    match &f.kind {
+        Kind::Int(..) => values(f, &pad, 12, out),
+        Kind::Message(m) => {
+            field_tree(
+                s,
+                &s.structs[*m].fields,
+                &format!("{path}."),
+                depth + 1,
+                out,
+            );
+        }
+        Kind::Array { elem, .. } | Kind::Pointer { elem, .. } => match &elem.kind {
+            Kind::Message(m) => field_tree(
+                s,
+                &s.structs[*m].fields,
+                &format!("{path}[N]."),
+                depth + 1,
+                out,
+            ),
+            _ => sub_tree(s, elem, &format!("{path}[N]"), depth, out),
+        },
+        Kind::Union { variants, .. } => {
+            field_tree(s, variants, &format!("{path}."), depth + 1, out);
+        }
+        _ => {}
+    }
 }
 
 fn presets(ctx: &ToolCtx) -> Result<String, String> {
@@ -500,34 +642,35 @@ fn read(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
         return Ok(format!("нет сообщений с seq ≥ {from}"));
     }
     let s = scheme_of(ctx);
-    let mut out = String::new();
-    for m in &msgs {
-        match s.message(m.msgid) {
-            Some(st) => {
-                out.push_str(&format!("- seq: {}\n  name: {}\n  data:\n", m.seq, st.name));
-                let node = decode::decode(s, st, &m.data);
-                for (_, n) in node.walk() {
-                    if n.value.is_none() || n.error.is_some() {
-                        continue;
-                    }
-                    if !only.is_empty() && !only.contains(&n.path) {
-                        continue;
-                    }
-                    out.push_str(&format!("    {}: {}\n", n.path, n.text()));
-                }
-            }
-            None => out.push_str(&format!(
-                "- seq: {}\n  msgid: {}\n  data: !!binary {}\n",
-                m.seq,
-                m.msgid,
-                m.data
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-            )),
+    Ok(msgs.iter().map(|m| message_yaml(s, m, &only)).collect())
+}
+
+/// Сообщение YAML-блоком, как его отдаёт `read_messages`: seq, имя и поля по
+/// путям (`only` — только эти пути; пусто — все).
+fn message_yaml(s: &Scheme, m: &Msg, only: &[String]) -> String {
+    let Some(st) = s.message(m.msgid) else {
+        return format!(
+            "- seq: {}\n  msgid: {}\n  data: !!binary {}\n",
+            m.seq,
+            m.msgid,
+            m.data
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+    };
+    let mut out = format!("- seq: {}\n  name: {}\n  data:\n", m.seq, st.name);
+    let node = decode::decode(s, st, &m.data);
+    for (_, n) in node.walk() {
+        if n.value.is_none() || n.error.is_some() {
+            continue;
         }
+        if !only.is_empty() && !only.contains(&n.path) {
+            continue;
+        }
+        out.push_str(&format!("    {}: {}\n", n.path, n.text()));
     }
-    Ok(out)
+    out
 }
 
 fn detail(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
@@ -552,6 +695,23 @@ fn detail(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
 }
 
 fn find(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
+    search_each(ctx, args, &mut |_| {})
+}
+
+/// `search_messages`, отдающий каждое найденное по мере скана: `each` видит
+/// текст совпадения (строку `seq N Тип` или, с `bodies`, YAML с полями) —
+/// сервер шлёт его событием, не дожидаясь конца файла (`agr:serve-events`).
+/// Ответ — все найденные вместе, как у инструмента.
+pub(crate) fn search_each(
+    ctx: &mut ToolCtx,
+    args: &Value,
+    each: &mut dyn FnMut(&str),
+) -> Result<String, String> {
+    let bodies = args
+        .get("bodies")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
+    let only = strings(args, "fields");
     let expr = args
         .get("expr")
         .and_then(|e| e.as_str())
@@ -599,8 +759,14 @@ fn find(ctx: &mut ToolCtx, args: &Value) -> Result<String, String> {
             if tf.transform(m)?.is_none() {
                 continue;
             }
-            let name = s.message(m.msgid).map_or("?", |st| st.name.as_str());
-            out.push_str(&format!("seq {} {}\n", m.seq, name));
+            let one = if bodies {
+                message_yaml(s, m, &only)
+            } else {
+                let name = s.message(m.msgid).map_or("?", |st| st.name.as_str());
+                format!("seq {} {}\n", m.seq, name)
+            };
+            each(&one);
+            out.push_str(&one);
             found += 1;
             if found == count {
                 break;
@@ -1202,26 +1368,7 @@ fn check(ctx: &ToolCtx, seq: i64) -> Result<Msg, String> {
 #[cfg(all(test, feature = "tll"))]
 pub(crate) fn tests_ctx() -> ToolCtx {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/plain.dat");
-    let file = crate::data::File::open(&path).unwrap();
-    ToolCtx {
-        file,
-        gen: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        patch: None,
-        ctx: crate::io::Context::new(),
-        total: None,
-        index: None,
-        acts: None,
-        edits: crate::edit::Edits::default(),
-        lua_code: String::new(),
-        lua_enabled: true,
-        debug: false,
-        filter: crate::lua::Filter::default(),
-        columns: Vec::new(),
-        sel_seq: None,
-        sel_row: None,
-        last_gen: 0,
-    }
+    ToolCtx::detached(crate::data::File::open(&path).unwrap())
 }
 
 #[cfg(all(test, feature = "tll"))]
@@ -1599,6 +1746,75 @@ mod tests {
         let args = format!(r#"{{"expr":"seq == {last}","count":1}}"#);
         let text = execute(&mut c, "search_messages", &args).unwrap();
         assert!(text.starts_with(&format!("seq {last} ")), "{text}");
+    }
+
+    /// Поля — деревом с путями, как у детали и правки: вложенное сообщение,
+    /// элементы списка и варианты объединения раскрыты; вложенную структуру
+    /// можно спросить по имени.
+    /// `agr:patch-path`
+    #[test]
+    fn schema_fields_expands_nested_fields_with_paths() {
+        let mut c = ctx();
+        let text = execute(&mut c, "schema_fields", r#"{"type":"Order"}"#).unwrap();
+        for path in [
+            "header.status : int8 enum Status",
+            "legs[N].qty : int32",
+            "u.num : int64",
+        ] {
+            assert!(text.contains(path), "нет {path}:\n{text}");
+        }
+        let head = execute(&mut c, "schema_fields", r#"{"type":"Head"}"#).unwrap();
+        assert!(
+            head.starts_with("Head:") && head.contains("  status : int8"),
+            "{head}"
+        );
+    }
+
+    /// С `bodies` поиск отдаёт найденные с полями — как `read_messages`, и
+    /// каждое найденное видно по мере скана.
+    /// `agr:serve-events`
+    #[test]
+    fn search_messages_with_bodies_returns_fields_as_found() {
+        let mut c = ctx();
+        let mut seen = Vec::new();
+        let args = json!({"expr": "seq == 3 or seq == 5", "count": 5, "bodies": true});
+        let text = search_each(&mut c, &args, &mut |m| seen.push(m.to_string())).unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(
+            seen[0].starts_with("- seq: 3\n  name: Cancel\n  data:\n"),
+            "{}",
+            seen[0]
+        );
+        assert_eq!(text, seen.concat());
+        let read = execute(&mut c, "read_messages", r#"{"from":5,"count":1}"#).unwrap();
+        assert_eq!(seen[1], read, "поля — как у read_messages");
+        let only =
+            json!({"expr": "seq == 0", "count": 1, "bodies": true, "fields": ["header.status"]});
+        let one = search_each(&mut c, &only, &mut |_| {}).unwrap();
+        assert!(
+            one.contains("header.status: OK") && !one.contains("symbol"),
+            "{one}"
+        );
+    }
+
+    /// Поиск идёт дальше несовпавших сообщений: первое совпадение после
+    /// куска без совпадений находится, а не читается тот же кусок по кругу.
+    #[test]
+    fn search_messages_moves_past_non_matching_messages() {
+        let mut c = ctx();
+        let text = execute(
+            &mut c,
+            "search_messages",
+            r#"{"expr":"seq == 7","count":1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            text.lines().next().unwrap().split(' ').nth(1),
+            Some("7"),
+            "{text}"
+        );
+        let none = execute(&mut c, "search_messages", r#"{"expr":"seq < 0","count":1}"#).unwrap();
+        assert!(none.starts_with("нет совпадений"), "{none}");
     }
 
     /// Подсчёт сообщений работает и без индекса, если задано выражение.

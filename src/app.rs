@@ -1,5 +1,6 @@
 //! Запуск mutator: разбор аргументов и выбор режима — окно, терминал (`--tui`)
-//! или печать (`--dump`, `--stat`, `--dump-code`, `--dump-seq`).
+//! или печать (`--dump`, `--stat`, `--dump-code`, `--dump-seq`), или сервер
+//! (`--serve`, фича `rest`: [`crate::serve`]).
 //!
 //! Вместо файла — линк (`resolve://svc/ch`, `stream+…`): [`io::link::Link`]
 //! пишет его в спул, вид открывается на спуле, когда линк стал Active; до того
@@ -64,6 +65,39 @@ mutator [FILE|LINK] [параметры] — просмотр датника и�
   MUTATOR_LUA    — путь к модулю tll-lua (…/build/tll-lua)
   MUTATOR_LIBTLL — путь к libtll, если она не в системных каталогах";
 
+/// Справка сервера — в сборке с ним.
+const USAGE_SERVE: &str = "
+  --serve ADDR          сервер для тестировщиков на ADDR (127.0.0.1:8080): только
+                        чтение — REST /api/v1/ops, SSE /api/v1/events, веб-UI на /
+                        (в сборке с wui); файл или
+                        линк — в вызове (\"file\"), FILE или LINK — по умолчанию,
+                        линк открыт сразу с --open и --keep";
+
+/// Справка MCP — в сборке с ним.
+const USAGE_MCP: &str = "
+  --mcp-token TOKEN     то же, что --token (или MCP_TOKEN): с ним на /mcp —
+                        MCP (streamable HTTP); без токена /mcp нет
+  --mcp-stdio           MCP по stdio вместо HTTP (FILE или LINK — по умолчанию);
+                        для Claude Desktop: {\"mcpServers\": {\"mutator\":
+                        {\"command\": \"mutator\", \"args\": [\"--mcp-stdio\"]}}}";
+
+/// Справка `--help`: параметры сборки — перед окружением.
+fn usage() -> String {
+    let (opts, env) = USAGE.split_once("\n\nОкружение:").unwrap_or((USAGE, ""));
+    let mut u = opts.to_string();
+    if cfg!(feature = "rest") {
+        u.push_str(USAGE_SERVE);
+    }
+    if cfg!(feature = "mcp") {
+        u.push_str(USAGE_MCP);
+    }
+    if !env.is_empty() {
+        u.push_str("\n\nОкружение:");
+        u.push_str(env);
+    }
+    u
+}
+
 #[derive(Default)]
 struct Args {
     file: Option<PathBuf>,
@@ -85,6 +119,9 @@ struct Args {
     foreground: bool,
     gui: bool,
     backend: Option<io::Backend>,
+    serve: Option<String>,
+    token: Option<String>,
+    mcp_stdio: bool,
 }
 
 /// Краска `--dump`: auto — только если вывод в терминал.
@@ -128,6 +165,9 @@ fn parse() -> Result<Args, String> {
             "--resolve" => a.resolve = Some(val(&x)?),
             "--open" => a.open = Some(val(&x)?),
             "--keep" => a.keep = Some(PathBuf::from(val(&x)?)),
+            "--serve" if cfg!(feature = "rest") => a.serve = Some(val(&x)?),
+            "--token" | "--mcp-token" if cfg!(feature = "rest") => a.token = Some(val(&x)?),
+            "--mcp-stdio" if cfg!(feature = "mcp") => a.mcp_stdio = true,
             "--backend" => {
                 a.backend = Some(val(&x)?.parse().map_err(|e| format!("--backend: {e}"))?)
             }
@@ -143,6 +183,21 @@ fn parse() -> Result<Args, String> {
 /// `--gui` — окно: с терминалом и печатью он не сочетается, а в сборке без GUI
 /// окна нет.
 fn check(a: &Args) -> Result<(), String> {
+    if a.token.is_some() && a.serve.is_none() {
+        return Err("--mcp-token — для --serve (MCP по HTTP)".into());
+    }
+    if a.mcp_stdio && a.serve.is_some() {
+        return Err("--mcp-stdio — MCP по stdio, без --serve".into());
+    }
+    if a.serve.is_some() || a.mcp_stdio {
+        if a.file.is_some() && a.link.is_some() {
+            return Err("--serve: файл или линк по умолчанию — один".into());
+        }
+        if a.link.is_none() && (a.open.is_some() || a.keep.is_some()) {
+            return Err("--open и --keep — только для линка".into());
+        }
+        return Ok(());
+    }
     if a.link.is_some() {
         if a.stat || a.dump_seq {
             return Err(
@@ -182,7 +237,7 @@ pub fn main() -> ExitCode {
             if !e.is_empty() {
                 eprintln!("{e}\n");
             }
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             return ExitCode::from(2);
         }
     };
@@ -197,6 +252,21 @@ pub fn main() -> ExitCode {
     // Спулы линков, брошенные упавшими процессами, и свои — при выходе.
     io::link::cleanup_stale();
     let _spools = Spools;
+    // `--backend` — до любого режима, в том числе сервера: тот выходит здесь же.
+    if let Some(b) = a.backend {
+        io::force(b);
+    }
+    #[cfg(feature = "rest")]
+    if a.serve.is_some() || a.mcp_stdio {
+        io::quiet();
+        return match serve(&a) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("mutator: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let file = match a.file.clone() {
         Some(f) => Some(f),
         None if a.link.is_some() => None,
@@ -204,7 +274,7 @@ pub fn main() -> ExitCode {
         // с диалогом выбора (`agr:open-without-file`).
         None if windowed(&a) => crate::recent::Recent::load().last_existing(),
         None => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             return ExitCode::from(2);
         }
     };
@@ -217,9 +287,6 @@ pub fn main() -> ExitCode {
     {
         return ExitCode::SUCCESS;
     }
-    if let Some(b) = a.backend {
-        io::force(b);
-    }
     io::quiet();
     match run(a, file) {
         Ok(()) => ExitCode::SUCCESS,
@@ -228,6 +295,50 @@ pub fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `--serve` и `--mcp-stdio`: файл или линк из командной строки — по
+/// умолчанию для вызовов без `file`; линк открывается сразу, с `--open` и
+/// `--keep`. Журнал — в stderr: stdout у `--mcp-stdio` — протокол.
+#[cfg(feature = "rest")]
+fn serve(a: &Args) -> Result<(), String> {
+    use crate::serve::ops::Links;
+    use crate::serve::rest::{self, Server};
+    let default = match (&a.link, &a.file) {
+        (Some(url), _) => Some(url.clone()),
+        (None, Some(f)) => Some(f.display().to_string()),
+        (None, None) => None,
+    };
+    let links = Links::new(default, a.keep.clone());
+    if let Some(url) = &a.link {
+        links.open(url, a.open.as_deref())?;
+    }
+    let server = Server::new(links);
+    #[cfg(feature = "mcp")]
+    if a.mcp_stdio {
+        return crate::serve::mcp::stdio(server);
+    }
+    // Токен закрывает весь сервер; без него — только loopback (`agr:serve-token`).
+    let env = |k: &str| std::env::var(k).ok().filter(|t| !t.is_empty());
+    let token = a
+        .token
+        .clone()
+        .or_else(|| env("MUTATOR_TOKEN"))
+        .or_else(|| env("MCP_TOKEN"));
+    let addr = a.serve.as_deref().unwrap_or_default();
+    rest::check_bind(addr, token.is_some())?;
+    let outer = token.clone();
+    #[cfg(feature = "mcp")]
+    let mcp = server.clone();
+    #[cfg(feature = "wui")]
+    let ui = server.clone();
+    rest::run(addr, server, move |r| {
+        #[cfg(feature = "wui")]
+        let r = crate::serve::wui::mount(r, ui);
+        #[cfg(feature = "mcp")]
+        let r = crate::serve::mcp::mount(r, mcp, token);
+        rest::guard(r, outer)
+    })
 }
 
 /// Запуск без файла допустим только для окна: ни терминал, ни печать файла не
@@ -486,7 +597,37 @@ fn dump_link(a: &Args, link: &io::link::Link) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check, should_detach, stays_in_terminal, Args};
+    use super::{check, should_detach, stays_in_terminal, usage, Args};
+
+    /// `agr:serve-features` — сервер есть в справке только в сборке с `rest`;
+    /// файл или линк из командной строки — один, по умолчанию.
+    #[test]
+    fn serve_exists_only_in_a_build_with_its_feature() {
+        assert_eq!(usage().contains("--serve"), cfg!(feature = "rest"));
+        let serve = Args {
+            serve: Some("127.0.0.1:0".into()),
+            ..Args::default()
+        };
+        assert!(check(&serve).is_ok());
+        let with_link = Args {
+            link: Some("resolve://a/b".into()),
+            open: Some("mode=seq;seq=0".into()),
+            ..serve
+        };
+        assert!(check(&with_link).is_ok(), "линк по умолчанию с --open");
+        let both = Args {
+            file: Some("a.dat".into()),
+            ..with_link
+        };
+        assert!(check(&both).is_err());
+        assert_eq!(usage().contains("--mcp-stdio"), cfg!(feature = "mcp"));
+        let stdio_and_http = Args {
+            serve: Some("127.0.0.1:0".into()),
+            mcp_stdio: true,
+            ..Args::default()
+        };
+        assert!(check(&stdio_and_http).is_err(), "stdio — без --serve");
+    }
 
     /// `agr:gui-detach` — окно из терминала отсоединяется.
     #[test]
