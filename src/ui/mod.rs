@@ -22,7 +22,10 @@
 //! открывает записанный файл ([`crate::desk::Desk::reopen`]), а сессия
 //! прежнего файла пишется уже без правок.
 //!
-//! Наружу: [`run`], [`Look`], [`App`], [`Shell`], [`cols`], [`theme`], [`tui`].
+//! Линк окно открывает [`run_link`]: заглушка с его состоянием, пока спула
+//! нет (`agr:link-state`).
+//!
+//! Наружу: [`run`], [`run_link`], [`Look`], [`App`], [`Shell`], [`cols`], [`theme`], [`tui`].
 
 pub mod agent;
 mod bar;
@@ -166,6 +169,45 @@ pub fn run(
     .map_err(|e| e.to_string())
 }
 
+/// Открыть окно на линке `url` с параметрами `open`: заглушка с его
+/// состоянием, пока он не стал Active, потом — вид на спуле (`agr:link-state`).
+#[cfg(feature = "gui")]
+pub fn run_link(
+    url: String,
+    open: String,
+    keep: Option<std::path::PathBuf>,
+    fresh: bool,
+    setup: impl FnOnce(&mut Desk) + 'static,
+) -> Result<(), String> {
+    let title = format!("mutator — {url}");
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1400.0, 900.0])
+            .with_title(&title),
+        ..Default::default()
+    };
+    eframe::run_native(
+        &title,
+        options,
+        Box::new(move |cc| {
+            style(&cc.egui_ctx);
+            let recent = crate::recent::Recent::load();
+            let menu = menu::Menu::new(&cc.egui_ctx, &recent);
+            let mut shell = shell::Shell::new(None, recent).with_menu(menu);
+            shell.open_link(
+                &cc.egui_ctx,
+                &url,
+                &open,
+                keep,
+                fresh,
+                Some(Box::new(setup)),
+            );
+            Ok(Box::new(shell))
+        }),
+    )
+    .map_err(|e| e.to_string())
+}
+
 #[cfg(not(feature = "gui"))]
 pub fn run(
     _file: Option<File>,
@@ -260,7 +302,7 @@ impl App {
     fn finish(&self, ctx: &egui::Context) {
         let _ = self.cmd.send(agent_::Cmd::Shutdown);
         if self.shot.is_none() {
-            let _ = session::save(std::path::Path::new(&self.desk.file.name), &self.snapshot(ctx));
+            let _ = session::save(&self.desk.file.session_key(), &self.snapshot(ctx));
         }
     }
 
@@ -434,6 +476,9 @@ impl App {
 
 fn status(ui: &mut egui::Ui, d: &Desk) {
     ui.horizontal(|ui| {
+        if let Some((t, fg)) = tui::link_line(d) {
+            ui.label(egui::RichText::new(t).monospace().color(fg));
+        }
         ui.label(egui::RichText::new(tui::position(d)).monospace());
         if d.searching {
             ui.spinner();
@@ -521,8 +566,7 @@ impl App {
             return;
         };
         if self.shot.is_none() {
-            let _ =
-                session::save(std::path::Path::new(&self.desk.file.name), &self.snapshot(ctx));
+            let _ = session::save(&self.desk.file.session_key(), &self.snapshot(ctx));
         }
         match self.desk.reopen(&p) {
             Ok(()) => {
@@ -542,7 +586,7 @@ impl App {
         }
         let s = self.snapshot(ctx);
         if s != self.saved {
-            if let Err(e) = session::save(std::path::Path::new(&self.desk.file.name), &s) {
+            if let Err(e) = session::save(&self.desk.file.session_key(), &s) {
                 self.desk.status = format!("сессия: {e}");
             }
             self.saved = s;

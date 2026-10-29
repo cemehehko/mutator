@@ -66,15 +66,6 @@ fn lua() -> bool {
     ok
 }
 
-fn patch() -> bool {
-    io::quiet();
-    let ok = io::Context::new().ensure_patch(tui_patch::io::Backend::TLL);
-    if !ok {
-        eprintln!("нет tll-patch (TUI_PATCH_PATCH) — проверки правок пропущены");
-    }
-    ok
-}
-
 /// `agr:agent-same-desk` — переход и колонка, присланные агентом, меняют тот же
 /// `Desk`: просьба идёт по каналу к состоянию человека, а не к его копии.
 #[test]
@@ -120,9 +111,7 @@ fn agent_filter_applies_to_the_same_desk() {
 /// думал, человек переоткрыл файл, и правка по старой картине не применяется.
 #[test]
 fn stale_edit_is_refused_after_reopen() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let mut d = open("lz4", 10);
     let seq = d.rows.first().map(|r| r.seq).expect("строка");
     let mut edits = Edits::default();
@@ -145,9 +134,7 @@ fn stale_edit_is_refused_after_reopen() {
 /// `Desk` незафиксированными: вид показывает их, а файл на диске не меняется.
 #[test]
 fn agent_edits_show_on_the_same_desk() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let mut d = open("lz4", 10);
     let seq = d.rows.first().map(|r| r.seq).expect("строка");
     let before = std::fs::read(fixture("lz4")).unwrap();

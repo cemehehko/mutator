@@ -11,8 +11,8 @@
 # и `//!` называют модули, файлы и поверхность), cov (покрытие по модулям карты,
 # пороги — в scripts/cover.sh), budget (файлы уровней — в бюджете строк).
 #
-# Образ с libtll, tll-lua и tll-patch собирается из соседних исходников
-# `../tll`, `../tll-lua`, `../tll-patch` (docker/Dockerfile). Кэш реестра и
+# Образ с libtll и tll-lua собирается из соседних исходников `../tll`,
+# `../tll-lua` (docker/Dockerfile). Кэш реестра и
 # сборки — в именованных томах.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -34,8 +34,7 @@ ctx=$(mktemp -d)
 trap 'rm -rf "$ctx"' EXIT
 cp docker/Dockerfile "$ctx/"
 for src in "${TLL_SRC:-../tll}:tll" \
-  "${TLL_LUA_SRC:-../tll-lua}:tll-lua" \
-  "${TLL_PATCH_SRC:-../tll-patch}:tll-patch"; do
+  "${TLL_LUA_SRC:-../tll-lua}:tll-lua"; do
   rsync -a --exclude .git --exclude build --exclude b --exclude .cache "${src%%:*}/" "$ctx/${src##*:}/"
 done
 docker build -q -t "$image" "$ctx" >/dev/null

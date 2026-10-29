@@ -17,15 +17,26 @@
 //! который заводит контекст на поток (`data/`, `dump`, фиксация, агент), не знает
 //! и не должен знать, чей файл.
 //!
-//! Файлы: `dynlib.rs` — загрузка библиотек бэкендов и таблицы их функций.
+//! Правки ([`Open::patch`]) бэкенду не видны: [`Reader`] накладывает их сам
+//! поверх того, что отдал бэкенд (уже после transform), — одинаково для любого
+//! формата (`agr:patch-overlay`). Правка, которую нельзя записать, обрывает
+//! чтение ошибкой, как оборванный канал.
+//!
+//! Линк (`resolve://…`, `stream+…`) бэкенд узнаёт по url ([`Driver::link`]) и
+//! открывает каналом ([`DriverContext::link`]); [`link::Link`] пишет его в спул —
+//! дальше это обычный файл (`agr:link-spool`).
+//!
+//! Файлы: `dynlib.rs` — загрузка библиотек бэкендов и таблицы их функций,
+//! `link.rs` — линк: канал в спул и его состояние.
 //!
 //! Наружу: [`Backend`], [`Driver`], [`DriverContext`], [`DriverReader`],
 //! [`DriverWriter`], [`DriverTransformer`], [`register`], [`driver`], [`force`],
 //! [`resolve`], [`Context`], [`Pooled`], [`Open`], [`Reader`], [`Writer`],
 //! [`Transformer`], [`Msg`], [`Info`], [`LuaMode`], [`dump_line`], [`quiet`],
-//! [`take_error`].
+//! [`take_error`], [`link`].
 
 pub mod dynlib;
+pub mod link;
 
 use std::cell::RefCell;
 use std::io::Read;
@@ -33,6 +44,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock, RwLock};
 
+use crate::edit::{encode, Patch};
 use crate::scheme::Scheme;
 
 /// Имя бэкенда: `tll` и те, что зарегистрированы извне.
@@ -86,14 +98,20 @@ pub trait Driver: Send + Sync {
     fn take_error(&self) -> Option<String> {
         None
     }
+    /// Его ли линк — url канала (не файл); `false` — бэкенд линков не открывает.
+    fn link(&self, _url: &str) -> bool {
+        false
+    }
+    /// Параметры открытия линка `url` по умолчанию ([`link::default_open`]).
+    fn link_open(&self, _url: &str) -> String {
+        String::new()
+    }
 }
 
 /// Контекст бэкенда на поток.
 pub trait DriverContext: Send {
     /// Подгрузить Lua-линк; `false` — модуля нет.
     fn ensure_lua(&self) -> bool;
-    /// Подгрузить линк правок; `false` — модуля нет.
-    fn ensure_patch(&self) -> bool;
     fn reader(&self, o: &Open) -> Result<Box<dyn DriverReader>, String>;
     fn writer(
         &self,
@@ -109,6 +127,10 @@ pub trait DriverContext: Send {
         scheme_url: &str,
         filter: bool,
     ) -> Result<Box<dyn DriverTransformer>, String>;
+    /// Открыть линк `url` с параметрами открытия `open` (`mode=online`).
+    fn link(&self, _url: &str, _open: &str) -> Result<Box<dyn link::DriverLink>, String> {
+        Err("этот бэкенд линки не открывает".into())
+    }
 }
 
 /// Чтение файла бэкендом.
@@ -235,8 +257,8 @@ pub struct Open {
     pub lua_mode: Option<LuaMode>,
     /// Не копировать тела: индексу хватает seq и msgid.
     pub meta_only: bool,
-    /// yaml правок — читать через префикс `patch+`.
-    pub patch: Option<PathBuf>,
+    /// Правки поверх потока бэкенда (`agr:patch-overlay`).
+    pub patch: Option<Patch>,
 }
 
 impl Open {
@@ -262,8 +284,8 @@ impl Open {
         self.meta_only = true;
         self
     }
-    pub fn patch(mut self, yaml: Option<PathBuf>) -> Self {
-        self.patch = yaml;
+    pub fn patch(mut self, patch: Option<Patch>) -> Self {
+        self.patch = patch;
         self
     }
 }
@@ -320,11 +342,6 @@ impl Context {
     pub fn ensure_lua(&self, b: Backend) -> bool {
         self.with(b, |c| Ok(c.ensure_lua())).unwrap_or(false)
     }
-
-    /// Подгрузить линк правок бэкенда; `false` — модуля нет.
-    pub fn ensure_patch(&self, b: Backend) -> bool {
-        self.with(b, |c| Ok(c.ensure_patch())).unwrap_or(false)
-    }
 }
 
 /// Контекст из общего пула: схема файла, разобранная при первом открытии,
@@ -355,46 +372,123 @@ impl Drop for Pooled {
     }
 }
 
-/// Открытый канал чтения.
-pub struct Reader(Box<dyn DriverReader>);
+/// Открытый канал чтения: поток бэкенда и правки поверх него.
+pub struct Reader {
+    inner: Box<dyn DriverReader>,
+    patch: Option<Patch>,
+    /// Поток фиксации: вставки, удаления и сдвиг seq ([`Patch::stream`]).
+    stream: Option<encode::Stream>,
+    /// Схема для правок — берётся у бэкенда при первой правленой строке.
+    scheme: Option<Scheme>,
+    /// Готовые сообщения потока фиксации: вставки перед очередным.
+    queue: std::collections::VecDeque<Msg>,
+    /// Поток бэкенда кончился.
+    done: bool,
+    /// Правка не записалась — чтение оборвано.
+    error: Option<String>,
+}
 
 impl Reader {
     pub fn open(ctx: &Context, o: &Open) -> Result<Reader, String> {
         let b = resolve(&o.path, o.backend)?;
-        ctx.with(b, |c| c.reader(o)).map(Reader)
+        let inner = ctx.with(b, |c| c.reader(o))?;
+        // Индексу нужны seq и msgid файла — правки ему не накладываются.
+        let patch = o.patch.clone().filter(|_| !o.meta_only);
+        let stream = patch.as_ref().and_then(|p| {
+            p.stream
+                .map(|span| encode::Stream::new(p.edits.clone(), span))
+        });
+        Ok(Reader {
+            inner,
+            patch,
+            stream,
+            scheme: None,
+            queue: Default::default(),
+            done: false,
+            error: None,
+        })
     }
 
     /// Флаг отмены: взведён — [`Reader::next`] сразу отдаёт `None`.
     pub fn with_stop(mut self, stop: Arc<AtomicBool>) -> Self {
-        self.0.set_stop(stop);
+        self.inner.set_stop(stop);
         self
     }
 
-    /// Канал оборвался ошибкой (у Lua-фильтра — ошибкой выражения): текст.
+    /// Канал оборвался ошибкой (у Lua-фильтра — ошибкой выражения, у правки —
+    /// значением, которое не записать): текст.
     pub fn error(&self) -> Option<String> {
-        self.0.error()
+        self.error.clone().or_else(|| self.inner.error())
     }
 
     /// Схема данных канала.
     pub fn scheme(&self) -> Option<Scheme> {
-        self.0.scheme()
+        self.inner.scheme()
     }
 
     /// Схема данных строкой url — для канала записи и Lua-пары.
     pub fn scheme_url(&self) -> Option<String> {
-        self.0.scheme_url()
+        self.inner.scheme_url()
     }
 
     /// Первый/последний seq и параметры файла.
     pub fn info(&self) -> Info {
-        self.0.info()
+        self.inner.info()
+    }
+
+    /// Схема для правок: у бэкенда, один раз.
+    fn edit_scheme(&mut self) -> Result<&Scheme, String> {
+        if self.scheme.is_none() {
+            self.scheme = Some(self.inner.scheme().ok_or("правки: у файла нет схемы")?);
+        }
+        Ok(self.scheme.as_ref().unwrap())
+    }
+
+    /// Следующее сообщение потока фиксации в очередь; `false` — конец.
+    fn pump(&mut self) -> Result<bool, String> {
+        let m = self.inner.next();
+        let mut stream = self.stream.take().unwrap();
+        let mut out = Vec::new();
+        let r = self.edit_scheme().and_then(|s| match m {
+            Some(m) => stream.push(s, m, &mut out).map(|()| true),
+            None => stream.finish(s, &mut out).map(|()| false),
+        });
+        self.stream = Some(stream);
+        self.queue.extend(out);
+        r
     }
 }
 
 impl Iterator for Reader {
     type Item = Msg;
     fn next(&mut self) -> Option<Msg> {
-        self.0.next()
+        if self.patch.is_none() {
+            return self.inner.next();
+        }
+        loop {
+            if let Some(m) = self.queue.pop_front() {
+                return Some(m);
+            }
+            if self.error.is_some() || self.done {
+                return None;
+            }
+            if self.stream.is_some() {
+                match self.pump() {
+                    Ok(more) => self.done = !more,
+                    Err(e) => self.error = Some(e),
+                }
+                continue;
+            }
+            let m = self.inner.next()?;
+            let edits = self.patch.as_ref().unwrap().edits.clone();
+            if edits.message(m.seq).is_none() && edits.op(m.seq).is_none() {
+                return Some(m);
+            }
+            match self.edit_scheme().and_then(|s| encode::view(s, &edits, m)) {
+                Ok(m) => return Some(m),
+                Err(e) => self.error = Some(e),
+            }
+        }
     }
 }
 
@@ -515,14 +609,11 @@ mod tests {
         fn ensure_lua(&self) -> bool {
             true
         }
-        fn ensure_patch(&self) -> bool {
-            false
-        }
         fn reader(&self, _: &Open) -> Result<Box<dyn DriverReader>, String> {
             let m = |seq| Msg {
                 seq,
                 msgid: 1,
-                data: vec![],
+                data: vec![0],
             };
             Ok(Box::new(FakeReader(vec![m(2), m(1)])))
         }
@@ -554,7 +645,7 @@ mod tests {
             None
         }
         fn scheme(&self) -> Option<Scheme> {
-            None
+            Some(fake_scheme())
         }
         fn scheme_url(&self) -> Option<String> {
             None
@@ -565,6 +656,61 @@ mod tests {
                 ..Default::default()
             }
         }
+    }
+
+    /// Схема подставного формата: запись `R` с одним `int8 x`.
+    fn fake_scheme() -> Scheme {
+        use crate::scheme::{Field, Int, Kind, Struct, Sub};
+        Scheme {
+            structs: vec![Struct {
+                name: "R".into(),
+                msgid: 1,
+                size: 1,
+                fields: vec![Field {
+                    name: "x".into(),
+                    offset: 0,
+                    size: 1,
+                    kind: Kind::Int(Int::I8, Sub::None),
+                    options: vec![],
+                    index: -1,
+                }],
+                options: vec![],
+                pmap: None,
+            }],
+            by_id: [(1, 0)].into(),
+            options: vec![],
+        }
+    }
+
+    /// `agr:patch-overlay` — правки накладывает фасад, а не бэкенд: подставной
+    /// формат без всякого модуля правок читается с ними, и с составом потока;
+    /// правка, которую не записать, обрывает чтение ошибкой.
+    #[test]
+    fn edits_overlay_any_backend() {
+        static FAKE: Fake = Fake;
+        register(&FAKE);
+        let dir = std::env::temp_dir().join(format!("mutator-overlay-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("x.dat");
+        std::fs::write(&p, b"FAKE....").unwrap();
+        let read = |patch| -> Vec<(i64, Vec<u8>)> {
+            let r = Reader::open(&Context::new(), &Open::file(&p).patch(patch)).unwrap();
+            r.map(|m| (m.seq, m.data)).collect()
+        };
+        let mut e = crate::edit::Edits::default();
+        e.set(2, "R", "x", "0", "-5");
+        assert_eq!(read(e.patch()), [(1, vec![0]), (2, vec![(-5i8) as u8])]);
+        e.delete(1, "R", true, None);
+        assert_eq!(
+            read(e.commit_patch()),
+            [(1, vec![(-5i8) as u8])],
+            "удаление со сдвигом"
+        );
+        e.set(2, "R", "x", "0", "300");
+        let mut r = Reader::open(&Context::new(), &Open::file(&p).patch(e.patch())).unwrap();
+        assert_eq!(r.by_ref().count(), 1, "чтение оборвалось на правке");
+        assert!(r.error().unwrap().contains("300"), "{:?}", r.error());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// `agr:backend-plugin` — внешний бэкенд после [`register`] узнаёт свой файл,

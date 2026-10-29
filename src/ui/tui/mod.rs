@@ -12,7 +12,10 @@
 //!
 //! Наружу: [`frame`], [`Act`], [`grid`], [`term`], [`position`].
 //!
-//! Ещё: [`group`], [`title`], [`apply`].
+//! У линка в заголовке справа — его состояние ([`link_line`], `agr:link-state`):
+//! видно всегда, цветом по состоянию; тот же значок — в строке состояния окна.
+//!
+//! Ещё: [`group`], [`title`], [`apply`], [`link_line`].
 
 pub mod grid;
 pub mod term;
@@ -71,12 +74,43 @@ pub fn position(d: &Desk) -> String {
     }
 }
 
+/// Состояние линка строкой и цветом (`agr:link-state`); не линк — `None`.
+pub fn link_line(d: &Desk) -> Option<(String, Color32)> {
+    use crate::io::link::LinkState;
+    let s = d.link_status()?;
+    let fg = match s.state {
+        LinkState::Active => OK,
+        LinkState::Error => ERROR,
+        LinkState::Closed => DIM,
+        LinkState::Opening | LinkState::Closing => NAME,
+    };
+    let mut t = format!("● {}", s.state.name());
+    match (s.history, s.online) {
+        (_, true) => t += " · онлайн",
+        (Some(true), false) => t += " · история",
+        _ => {}
+    }
+    t += &format!(" · {} · {}", s.open, group(s.count as usize));
+    if let Some(e) = &s.error {
+        t += &format!(" · {}", e.lines().next().unwrap_or(""));
+    }
+    if s.kept {
+        if let Some(p) = &s.spool {
+            t += &format!(" · спул {}", p.display());
+        }
+    }
+    Some((t, fg))
+}
+
 /// Заголовок: файл, границы, сколько строк, фильтр, индекс.
 pub fn title(d: &Desk) -> String {
-    let name = std::path::Path::new(&d.file.name)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| d.file.name.clone());
+    let name = match &d.file.link {
+        Some(l) => l.url().to_string(),
+        None => std::path::Path::new(&d.file.name)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| d.file.name.clone()),
+    };
     let i = &d.file.info;
     let mut s = format!(" {name}");
     if let (Some(b), Some(l)) = (i.seq_begin, i.seq_last) {
@@ -144,6 +178,15 @@ pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
     // Заголовок.
     g.shade(0, 0, cols, PANEL);
     g.put(0, 0, &title(d), TEXT);
+    if let Some((t, fg)) = link_line(d) {
+        // Состояние линка — поверх хвоста заголовка: оно важнее.
+        let w = t.chars().count() + 2;
+        let x = cols.saturating_sub(w);
+        for k in x..cols {
+            g.set(0, k, ' ', TEXT);
+        }
+        g.put(0, x + 1, &t, fg);
+    }
 
     // Таблица: шапка и строки, справа полоса прокрутки.
     let width = cols.saturating_sub(1);
@@ -611,7 +654,7 @@ fn draw_commit(g: &mut Grid<Act>, d: &Desk, cols: usize, rows: usize) {
     }
     let (msg, fg) = match (&c.error, c.running) {
         (Some(_), _) => (String::new(), ERROR),
-        (None, Some(p)) => (format!("пишу через tll-patch… {:.0}%", p * 100.0), OK),
+        (None, Some(p)) => (format!("пишу… {:.0}%", p * 100.0), OK),
         _ => (String::new(), DIM),
     };
     g.put(

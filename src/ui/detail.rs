@@ -328,7 +328,7 @@ pub(super) fn edit_line(ui: &mut egui::Ui, d: &mut Desk) {
     } else if is_bits {
         "hex-число или флаги из списка"
     } else {
-        "значение проверит tll-patch; enum — имя, bits — a|b"
+        "значение проверяется записью по схеме; enum — имя, bits — a|b"
     };
     let mut width: f32 = 480.0;
     if has_items {

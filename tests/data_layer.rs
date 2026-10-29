@@ -96,10 +96,7 @@ fn index_and_windows_match_full_read() {
                 seqs(&msgs[row..(row + 5).min(msgs.len())]),
                 "{name} row {row}"
             );
-            assert_eq!(
-                fetch::row_of(&ctx, &s, &idx, msgs[row].seq).unwrap(),
-                row
-            );
+            assert_eq!(fetch::row_of(&ctx, &s, &idx, msgs[row].seq).unwrap(), row);
         }
 
         // Окно с середины, дочитывание назад и вперёд, конец файла.
@@ -148,11 +145,9 @@ fn index_and_windows_match_full_read() {
         assert_eq!(head, seqs(&msgs[..3]));
         assert!(at_start);
         // Назад от начала — пусто и упор.
-        assert!(
-            fetch::before_seq(&ctx, &s, msgs[0].seq, 5, msgs[0].seq)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(fetch::before_seq(&ctx, &s, msgs[0].seq, 5, msgs[0].seq)
+            .unwrap()
+            .is_empty());
     }
 }
 

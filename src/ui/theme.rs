@@ -21,5 +21,5 @@ pub const SELECT_DIM: Color32 = Color32::from_rgb(0x2a, 0x2e, 0x36);
 pub const STRIPE: Color32 = Color32::from_rgb(0x1b, 0x1d, 0x22);
 /// Байты выбранного поля в hex.
 pub const HILITE: Color32 = Color32::from_rgb(0x4a, 0x3b, 0x1a);
-/// Правленое значение (наложено tll-patch, в файле ещё старое).
+/// Правленое значение (наложено правкой, в файле ещё старое).
 pub const EDITED: Color32 = Color32::from_rgb(0xff, 0x5f, 0x5f);

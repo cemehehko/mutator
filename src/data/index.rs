@@ -7,6 +7,9 @@
 //! Склейка (`agr:glue-parts`) — части по порядку, куски режутся по байтам каждой
 //! части, а строки и точки нумеруются сквозные.
 //!
+//! Хвост растущего спула линка дописывается [`Index::append`] — без
+//! перестройки всего индекса (`agr:link-tail`).
+//!
 //! Наружу: [`Index`], [`build`], [`STEP`].
 
 use std::collections::HashMap;
@@ -29,6 +32,9 @@ pub struct Index {
     pub total: usize,
     /// Сообщений каждого msgid.
     pub hist: HashMap<i32, usize>,
+    /// До какого seq построен: хвост растущего спула дописывается за ним
+    /// ([`Index::append`], `agr:link-tail`).
+    pub last: Option<i64>,
 }
 
 impl Index {
@@ -36,6 +42,19 @@ impl Index {
     pub fn point_for_row(&self, row: usize) -> Option<(usize, i64)> {
         let i = self.points.partition_point(|&(r, _)| r <= row);
         i.checked_sub(1).map(|i| self.points[i])
+    }
+
+    /// Дописать индекс хвоста `[self.last + 1, …]`: номера его строк идут за
+    /// нашими, точки — с тем же шагом (`agr:link-tail`).
+    pub fn append(&mut self, tail: Index) {
+        let base = self.total;
+        self.points
+            .extend(tail.points.iter().map(|&(r, s)| (base + r, s)));
+        self.total += tail.total;
+        for (k, v) in tail.hist {
+            *self.hist.entry(k).or_default() += v;
+        }
+        self.last = tail.last.or(self.last);
     }
 
     /// Ближайшая точка не дальше seq.
@@ -123,5 +142,8 @@ pub fn build(
     if stop.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("отменено".into());
     }
+    // Индекс знает, до какого seq он построен: хвост растущего спула
+    // дописывается за ним (`agr:link-tail`).
+    idx.last = parts.last().map(|&(_, _, last)| last);
     Ok(idx)
 }

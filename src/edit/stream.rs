@@ -1,19 +1,21 @@
 //! Состав потока: удаление, смена типа и вставка сообщений поверх файла —
-//! команды tll-patch `Remove`, `Clear`, `Update`, `Insert` (`agr:stream-ops`).
+//! в смысле команд tll-patch `Remove`, `Clear`, `Update`, `Insert`
+//! (`agr:stream-ops`); пишет их `encode.rs`.
 //!
 //! Всё адресуется входным seq — seq файла. На seq одна операция [`Op`];
 //! вставки ([`Insert`]) — отдельно, перед своим seq, в дыру — одна. Тело
 //! вставки и сменённого типа — [`Body`]: плоские пути детали (`header.status`,
-//! `trailer.extras[0].key`) → текст значения; в yaml tll-patch их вкладывает
-//! [`body_yaml`], из разобранного сообщения собирает [`body_of`].
+//! `trailer.extras[0].key`) → текст значения; из разобранного сообщения его
+//! собирает [`body_of`], в yaml для показа вкладывает [`body_yaml`].
 //!
 //! Перенумерацию вид не видит (`agr:view-input-seq`): seq после записи и
 //! последний seq файла считает [`SeqMap`] по самим командам, без прохода —
-//! как tll-patch: вставка в живой seq сдвигает всё после неё на +1, `Remove` —
+//! как запись: вставка в живой seq сдвигает всё после неё на +1, `Remove` —
 //! на −1, `Clear` и вставка в дыру — не сдвигают (`agr:seq-forecast`).
 //!
 //! Наружу: [`Op`], [`Insert`], [`Body`], [`body_of`], [`body_yaml`], [`SeqMap`],
-//! [`Forecast`].
+//! [`Forecast`]; для `encode.rs` — [`tree`] (тело деревом), [`Y`] (его узел) и
+//! [`BYTES`] (метка байтового значения).
 
 use std::collections::BTreeMap;
 
@@ -53,23 +55,21 @@ pub struct Insert {
     /// Seq, перед которым вставка, есть в файле: тогда seq дальше +1, иначе
     /// вставка ложится в дыру и никого не сдвигает.
     pub occupied: bool,
-    /// Тело, собранное tll-patch при проверке, — для строки вставки в виде.
+    /// Тело, собранное по `body` при проверке, — для строки вставки в виде.
     pub data: Vec<u8>,
 }
 
 /// Метка байтового значения в [`Body`]: дальше — hex, в yaml — `"\xNN"`.
-const BYTES: char = '\u{1}';
+pub(crate) const BYTES: char = '\u{1}';
 
 /// Тело разобранного сообщения `data`: все скаляры, включая элементы
-/// списков, — в виде, который разберёт tll-patch: биты — числом, байты —
-/// как есть (хвостовые нули — по умолчанию). Байты выше 0x7f yaml-строкой не
-/// передать (`\xff` — это `ÿ` в UTF-8): такое поле не переносится, и сверка
-/// копии с исходником это покажет.
+/// списков, — в виде, который разберёт [`super::encode`]: биты — числом,
+/// байты — hex за меткой (хвостовые нули — по умолчанию), так что копия
+/// сообщения совпадает с исходником байт в байт.
 pub fn body_of(root: &Node, data: &[u8]) -> Body {
     root.walk()
         .into_iter()
         .filter(|(_, n)| n.value.is_some() && n.error.is_none())
-        .filter(|(_, n)| !matches!(&n.value, Some(Value::Bytes(b)) if b.iter().any(|&x| x > 0x7f)))
         .map(|(_, n)| {
             let raw = data.get(n.offset..n.offset + n.size).unwrap_or(&[]);
             let v = match &n.value {
@@ -113,8 +113,8 @@ fn scalar(v: &str) -> String {
     out
 }
 
-/// Узел вложенного yaml: поле, список или значение.
-enum Y {
+/// Узел тела деревом: поле, список или значение.
+pub(crate) enum Y {
     Map(BTreeMap<String, Y>),
     Seq(BTreeMap<usize, Y>),
     Leaf(String),
@@ -209,15 +209,24 @@ fn emit(out: &mut String, node: &Y, indent: usize) {
     }
 }
 
-/// Тело в yaml-поля команды tll-patch с отступом `indent`: пути вкладываются
-/// в словари, `[i]` — в списки по порядку номеров.
-pub fn body_yaml(body: &Body, indent: usize) -> String {
+/// Тело деревом: пути вкладываются в словари, `[i]` — в списки по порядку
+/// номеров (пропуски номеров сжимаются, как у списка yaml).
+pub(crate) fn tree(body: &Body) -> BTreeMap<String, Y> {
     let mut root = Y::Map(BTreeMap::new());
     for (path, value) in body {
         put(&mut root, &steps(path), value);
     }
+    match root {
+        Y::Map(m) => m,
+        _ => BTreeMap::new(),
+    }
+}
+
+/// Тело в yaml-поля команды tll-patch с отступом `indent` — для показа правок
+/// и переноса в tll-patch.
+pub fn body_yaml(body: &Body, indent: usize) -> String {
     let mut out = String::new();
-    emit(&mut out, &root, indent);
+    emit(&mut out, &Y::Map(tree(body)), indent);
     out
 }
 
@@ -420,7 +429,7 @@ mod tests {
     }
 
     /// `agr:seq-forecast` — дыра и вставка на одном seq сдвигают хвост: для
-    /// tll-patch сообщение под `Clear` всё ещё входное.
+    /// записи сообщение под `Clear` всё ещё входное.
     #[test]
     fn clear_and_insert_at_one_seq_shift_the_tail() {
         let mut ops = BTreeMap::new();

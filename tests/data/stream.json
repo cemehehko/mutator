@@ -1,0 +1,6210 @@
+[
+ {
+  "file": "plain.dat",
+  "ops": [
+   {
+    "op": "remove",
+    "seq": 2,
+    "from": "Cancel"
+   },
+   {
+    "op": "clear",
+    "seq": 4,
+    "from": "Ping"
+   },
+   {
+    "op": "retype",
+    "seq": 5,
+    "from": "Order",
+    "name": "Ping",
+    "body": {
+     "n": "55"
+    }
+   },
+   {
+    "op": "field",
+    "seq": 5,
+    "name": "Ping",
+    "fields": {
+     "n": "56"
+    }
+   },
+   {
+    "op": "retype",
+    "seq": 7,
+    "from": "Cancel",
+    "name": "Order",
+    "body": {
+     "header.ts": "2026-01-02T03:04:05",
+     "header.status": "Wait",
+     "header.order_id": "9",
+     "symbol": "XX",
+     "side": "Sell",
+     "flags": "ioc|16",
+     "price": "1.5",
+     "amt": "2.5",
+     "ratio": "0.25",
+     "ttl": "10ms",
+     "u8": "1",
+     "u64": "18446744073709551615",
+     "raw": "ab",
+     "arr[0]": "5",
+     "arr[1]": "6",
+     "comment": "новое",
+     "legs[0].symbol": "A",
+     "legs[0].qty": "1",
+     "legs[1].symbol": "B",
+     "legs[1].qty": "2",
+     "short[0].symbol": "S",
+     "short[0].qty": "3",
+     "long[0].symbol": "LL",
+     "long[0].qty": "4",
+     "tags[0]": "x",
+     "tags[1]": "yy",
+     "u.text": "ins"
+    }
+   },
+   {
+    "op": "insert",
+    "seq": 9,
+    "name": "Cancel",
+    "occupied": true,
+    "body": {
+     "header.order_id": "1",
+     "opt.a": "7",
+     "opt.b": "8"
+    }
+   },
+   {
+    "op": "insert",
+    "seq": 9,
+    "name": "Ping",
+    "occupied": true,
+    "body": {
+     "n": "1"
+    }
+   },
+   {
+    "op": "field",
+    "seq": 10,
+    "name": "Order",
+    "fields": {
+     "price": "3.25",
+     "comment": "c"
+    }
+   },
+   {
+    "op": "insert",
+    "seq": 12,
+    "name": "Order",
+    "occupied": true,
+    "body": {
+     "header.ts": "2026-01-02T03:04:05",
+     "header.status": "Wait",
+     "header.order_id": "9",
+     "symbol": "XX",
+     "side": "Sell",
+     "flags": "ioc|16",
+     "price": "1.5",
+     "amt": "2.5",
+     "ratio": "0.25",
+     "ttl": "10ms",
+     "u8": "1",
+     "u64": "18446744073709551615",
+     "raw": "ab",
+     "arr[0]": "5",
+     "arr[1]": "6",
+     "comment": "новое",
+     "legs[0].symbol": "A",
+     "legs[0].qty": "1",
+     "legs[1].symbol": "B",
+     "legs[1].qty": "2",
+     "short[0].symbol": "S",
+     "short[0].qty": "3",
+     "long[0].symbol": "LL",
+     "long[0].qty": "4",
+     "tags[0]": "x",
+     "tags[1]": "yy",
+     "u.text": "ins"
+    }
+   },
+   {
+    "op": "remove",
+    "seq": 13,
+    "from": "Cancel"
+   },
+   {
+    "op": "remove",
+    "seq": 14,
+    "from": "Ping"
+   },
+   {
+    "op": "field",
+    "seq": 20,
+    "name": "Order",
+    "fields": {
+     "header.status": "Fail"
+    }
+   }
+  ],
+  "out": [
+   {
+    "seq": 0,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27Z",
+      "status": "OK",
+      "order_id": "1000"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "0"
+     },
+     "price": "100.00000000",
+     "amt": "0",
+     "ratio": "0.5",
+     "ttl": "0ms",
+     "u8": "255",
+     "u16": "65535",
+     "u32": "4000000000",
+     "u64": "9223372036854775808",
+     "i16": "0",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "0"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u0"
+     }
+    }
+   },
+   {
+    "seq": 1,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.001Z",
+      "status": "Fail",
+      "order_id": "1000"
+     },
+     "symbol": "GAZP",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "101.01000000",
+     "amt": "3000000.00",
+     "ratio": "1.0",
+     "ttl": "10ms",
+     "u8": "254",
+     "u16": "65534",
+     "u32": "4000000001",
+     "u64": "9223372036854775809",
+     "i16": "-1",
+     "raw": "420001ff",
+     "arr": [
+      "0"
+     ],
+     "comment": "c1",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "1"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-1"
+      }
+     ],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "num": "1"
+     }
+    }
+   },
+   {
+    "seq": 2,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.003002Z",
+      "status": "OK",
+      "order_id": "1001"
+     },
+     "opt": {
+      "a": "3"
+     }
+    }
+   },
+   {
+    "seq": 4,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "56"
+    }
+   },
+   {
+    "seq": 5,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.006006Z",
+      "status": "OK",
+      "order_id": "1003"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "106.06000000",
+     "amt": "-1.5E+3",
+     "ratio": "0.5",
+     "ttl": "60ms",
+     "u8": "249",
+     "u16": "65529",
+     "u32": "4000000006",
+     "u64": "9223372036854775814",
+     "i16": "-6",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c6",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "6"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u6"
+     }
+    }
+   },
+   {
+    "seq": 6,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-01-02T03:04:05Z",
+      "status": "Wait",
+      "order_id": "9"
+     },
+     "symbol": "XX",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "1.50000000",
+     "amt": "2.5",
+     "ratio": "0.25",
+     "ttl": "10ms",
+     "u8": "1",
+     "u16": "0",
+     "u32": "0",
+     "u64": "18446744073709551615",
+     "i16": "0",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "5",
+      "6"
+     ],
+     "comment": "новое",
+     "legs": [
+      {
+       "symbol": "A",
+       "qty": "1"
+      },
+      {
+       "symbol": "B",
+       "qty": "2"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "3"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "4"
+      }
+     ],
+     "tags": [
+      "x",
+      "yy"
+     ],
+     "u": {
+      "text": "ins"
+     }
+    }
+   },
+   {
+    "seq": 7,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.008008Z",
+      "status": "Wait",
+      "order_id": "1004"
+     },
+     "opt": {
+      "a": "8",
+      "b": "-8"
+     }
+    }
+   },
+   {
+    "seq": 8,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "1970-01-01T00:00:00Z",
+      "status": "OK",
+      "order_id": "1"
+     },
+     "opt": {
+      "a": "7",
+      "b": "8"
+     }
+    }
+   },
+   {
+    "seq": 9,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "1"
+    }
+   },
+   {
+    "seq": 10,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "9"
+    }
+   },
+   {
+    "seq": 11,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.010010Z",
+      "status": "Fail",
+      "order_id": "1005"
+     },
+     "symbol": "GAZP",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "3.25000000",
+     "amt": "-1.5E+3",
+     "ratio": "1.0",
+     "ttl": "100ms",
+     "u8": "245",
+     "u16": "65525",
+     "u32": "4000000010",
+     "u64": "9223372036854775818",
+     "i16": "-10",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "10"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "text": "u10"
+     }
+    }
+   },
+   {
+    "seq": 12,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.011010Z",
+      "status": "Wait",
+      "order_id": "1005"
+     },
+     "symbol": "",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "111.11000000",
+     "amt": "0.000001",
+     "ratio": "-2.25",
+     "ttl": "110ms",
+     "u8": "244",
+     "u16": "65524",
+     "u32": "4000000011",
+     "u64": "9223372036854775819",
+     "i16": "-11",
+     "raw": "4c0001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c11",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "11"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "11"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-11"
+      }
+     ],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "num": "11"
+     }
+    }
+   },
+   {
+    "seq": 13,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-01-02T03:04:05Z",
+      "status": "Wait",
+      "order_id": "9"
+     },
+     "symbol": "XX",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "1.50000000",
+     "amt": "2.5",
+     "ratio": "0.25",
+     "ttl": "10ms",
+     "u8": "1",
+     "u16": "0",
+     "u32": "0",
+     "u64": "18446744073709551615",
+     "i16": "0",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "5",
+      "6"
+     ],
+     "comment": "новое",
+     "legs": [
+      {
+       "symbol": "A",
+       "qty": "1"
+      },
+      {
+       "symbol": "B",
+       "qty": "2"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "3"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "4"
+      }
+     ],
+     "tags": [
+      "x",
+      "yy"
+     ],
+     "u": {
+      "text": "ins"
+     }
+    }
+   },
+   {
+    "seq": 14,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.012011Z",
+      "status": "OK",
+      "order_id": "1006"
+     },
+     "opt": {
+      "a": "12",
+      "b": "-12"
+     }
+    }
+   },
+   {
+    "seq": 15,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.015015Z",
+      "status": "OK",
+      "order_id": "1007"
+     },
+     "symbol": "SBER",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "115.15000000",
+     "amt": "0.000001",
+     "ratio": "0.5",
+     "ttl": "150ms",
+     "u8": "240",
+     "u16": "65520",
+     "u32": "4000000015",
+     "u64": "9223372036854775823",
+     "i16": "-15",
+     "raw": "500001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c15",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "15"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-15"
+      }
+     ],
+     "tags": [],
+     "u": {
+      "num": "15"
+     }
+    }
+   },
+   {
+    "seq": 16,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.016015Z",
+      "status": "Fail",
+      "order_id": "1008"
+     },
+     "symbol": "GAZP",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "0"
+     },
+     "price": "116.16000000",
+     "amt": "0",
+     "ratio": "1.0",
+     "ttl": "160ms",
+     "u8": "239",
+     "u16": "65519",
+     "u32": "4000000016",
+     "u64": "9223372036854775824",
+     "i16": "-16",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "16"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "text": "u16"
+     }
+    }
+   },
+   {
+    "seq": 17,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.017017Z",
+      "status": "Wait",
+      "order_id": "1008"
+     },
+     "opt": {
+      "a": "17"
+     }
+    }
+   },
+   {
+    "seq": 18,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.018017Z",
+      "status": "OK",
+      "order_id": "1009"
+     },
+     "opt": {
+      "a": "18",
+      "b": "-18"
+     }
+    }
+   },
+   {
+    "seq": 19,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "19"
+    }
+   },
+   {
+    "seq": 20,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.020019Z",
+      "status": "Fail",
+      "order_id": "1010"
+     },
+     "symbol": "",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "120.20000000",
+     "amt": "0",
+     "ratio": "-2.25",
+     "ttl": "200ms",
+     "u8": "235",
+     "u16": "65515",
+     "u32": "4000000020",
+     "u64": "9223372036854775828",
+     "i16": "-20",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "20"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "20"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "text": "u20"
+     }
+    }
+   },
+   {
+    "seq": 21,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.021021Z",
+      "status": "OK",
+      "order_id": "1010"
+     },
+     "symbol": "SBER",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "121.21000000",
+     "amt": "3000000.00",
+     "ratio": "0.5",
+     "ttl": "210ms",
+     "u8": "234",
+     "u16": "65514",
+     "u32": "4000000021",
+     "u64": "9223372036854775829",
+     "i16": "-21",
+     "raw": "560001ff",
+     "arr": [
+      "0"
+     ],
+     "comment": "c21",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "21"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-21"
+      }
+     ],
+     "tags": [],
+     "u": {
+      "num": "21"
+     }
+    }
+   },
+   {
+    "seq": 22,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.022021Z",
+      "status": "Fail",
+      "order_id": "1011"
+     },
+     "opt": {
+      "a": "22",
+      "b": "-22"
+     }
+    }
+   },
+   {
+    "seq": 23,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.023023Z",
+      "status": "Wait",
+      "order_id": "1011"
+     },
+     "opt": {
+      "a": "23"
+     }
+    }
+   },
+   {
+    "seq": 24,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "24"
+    }
+   },
+   {
+    "seq": 25,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.025025Z",
+      "status": "Fail",
+      "order_id": "1012"
+     },
+     "symbol": "GAZP",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "125.25000000",
+     "amt": "3000000.00",
+     "ratio": "1.0",
+     "ttl": "250ms",
+     "u8": "230",
+     "u16": "65510",
+     "u32": "4000000025",
+     "u64": "9223372036854775833",
+     "i16": "-25",
+     "raw": "5a0001ff",
+     "arr": [
+      "0"
+     ],
+     "comment": "c25",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "25"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-25"
+      }
+     ],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "num": "25"
+     }
+    }
+   },
+   {
+    "seq": 26,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.026025Z",
+      "status": "Wait",
+      "order_id": "1013"
+     },
+     "symbol": "",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "126.26000000",
+     "amt": "-1.5E+3",
+     "ratio": "-2.25",
+     "ttl": "260ms",
+     "u8": "229",
+     "u16": "65509",
+     "u32": "4000000026",
+     "u64": "9223372036854775834",
+     "i16": "-26",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c26",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "26"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "26"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "text": "u26"
+     }
+    }
+   },
+   {
+    "seq": 27,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.027027Z",
+      "status": "OK",
+      "order_id": "1013"
+     },
+     "opt": {
+      "a": "27"
+     }
+    }
+   },
+   {
+    "seq": 28,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.028027Z",
+      "status": "Fail",
+      "order_id": "1014"
+     },
+     "opt": {
+      "a": "28",
+      "b": "-28"
+     }
+    }
+   },
+   {
+    "seq": 29,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "29"
+    }
+   },
+   {
+    "seq": 30,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.030029Z",
+      "status": "OK",
+      "order_id": "1015"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "130.30000000",
+     "amt": "-1.5E+3",
+     "ratio": "0.5",
+     "ttl": "300ms",
+     "u8": "225",
+     "u16": "65505",
+     "u32": "4000000030",
+     "u64": "9223372036854775838",
+     "i16": "-30",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c30",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "30"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u30"
+     }
+    }
+   },
+   {
+    "seq": 31,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.031031Z",
+      "status": "Fail",
+      "order_id": "1015"
+     },
+     "symbol": "GAZP",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "131.31000000",
+     "amt": "0.000001",
+     "ratio": "1.0",
+     "ttl": "310ms",
+     "u8": "224",
+     "u16": "65504",
+     "u32": "4000000031",
+     "u64": "9223372036854775839",
+     "i16": "-31",
+     "raw": "460001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c31",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "31"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-31"
+      }
+     ],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "num": "31"
+     }
+    }
+   },
+   {
+    "seq": 32,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.032031Z",
+      "status": "Wait",
+      "order_id": "1016"
+     },
+     "opt": {
+      "a": "32",
+      "b": "-32"
+     }
+    }
+   },
+   {
+    "seq": 33,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.033033Z",
+      "status": "OK",
+      "order_id": "1016"
+     },
+     "opt": {
+      "a": "33"
+     }
+    }
+   },
+   {
+    "seq": 34,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "34"
+    }
+   },
+   {
+    "seq": 35,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.035035Z",
+      "status": "Wait",
+      "order_id": "1017"
+     },
+     "symbol": "",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "135.35000000",
+     "amt": "0.000001",
+     "ratio": "-2.25",
+     "ttl": "350ms",
+     "u8": "220",
+     "u16": "65500",
+     "u32": "4000000035",
+     "u64": "9223372036854775843",
+     "i16": "-35",
+     "raw": "4a0001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c35",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "35"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "35"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-35"
+      }
+     ],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "num": "35"
+     }
+    }
+   },
+   {
+    "seq": 36,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.036035Z",
+      "status": "OK",
+      "order_id": "1018"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "136.36000000",
+     "amt": "0",
+     "ratio": "0.5",
+     "ttl": "360ms",
+     "u8": "219",
+     "u16": "65499",
+     "u32": "4000000036",
+     "u64": "9223372036854775844",
+     "i16": "-36",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "36"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u36"
+     }
+    }
+   },
+   {
+    "seq": 37,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.037037Z",
+      "status": "Fail",
+      "order_id": "1018"
+     },
+     "opt": {
+      "a": "37"
+     }
+    }
+   },
+   {
+    "seq": 38,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.038037Z",
+      "status": "Wait",
+      "order_id": "1019"
+     },
+     "opt": {
+      "a": "38",
+      "b": "-38"
+     }
+    }
+   },
+   {
+    "seq": 39,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "39"
+    }
+   },
+   {
+    "seq": 40,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.040039Z",
+      "status": "Fail",
+      "order_id": "1020"
+     },
+     "symbol": "GAZP",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "0"
+     },
+     "price": "140.40000000",
+     "amt": "0",
+     "ratio": "1.0",
+     "ttl": "400ms",
+     "u8": "215",
+     "u16": "65495",
+     "u32": "4000000040",
+     "u64": "9223372036854775848",
+     "i16": "-40",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "40"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "text": "u40"
+     }
+    }
+   },
+   {
+    "seq": 41,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 42,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 43,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 44,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 45,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 46,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 47,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 48,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 49,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 50,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 51,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 52,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 53,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 54,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 55,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 56,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 57,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 58,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 59,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 60,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 61,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 62,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 63,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 64,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 65,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 66,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 67,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 68,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 69,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 70,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 71,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 72,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 73,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 74,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 75,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 76,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 77,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 78,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 79,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 80,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 81,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 82,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 83,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 84,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 85,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 86,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 87,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 88,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 89,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 90,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 91,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 92,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 93,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 94,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 95,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 96,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 97,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 98,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 99,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 100,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 101,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 102,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 103,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 104,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 105,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 106,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 107,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 108,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 109,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 110,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 111,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 112,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 113,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 114,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 115,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 116,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 117,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 118,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 119,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 120,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 121,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 122,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 123,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 124,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 125,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 126,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 127,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 128,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 129,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 130,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 131,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 132,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 133,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 134,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 135,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 136,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 137,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 138,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 139,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 140,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 141,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 142,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 143,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 144,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 145,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 146,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 147,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 148,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 149,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 150,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 151,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 152,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 153,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 154,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 155,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 156,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 157,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 158,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 159,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 160,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 161,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 162,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 163,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 164,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 165,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 166,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 167,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 168,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 169,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 170,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 171,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 172,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 173,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 174,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 175,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 176,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 177,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 178,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 179,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 180,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 181,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 182,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 183,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 184,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 185,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 186,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 187,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 188,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 189,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 190,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 191,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 192,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 193,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 194,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 195,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 196,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 197,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 198,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 199,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 200,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 201,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 202,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 203,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 204,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 205,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 206,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 207,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 208,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 209,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 210,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 211,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 212,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 213,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 214,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 215,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 216,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 217,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 218,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 219,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 220,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 221,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 222,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 223,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 224,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 225,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 226,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 227,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 228,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 229,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 230,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 231,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 232,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 233,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 234,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 235,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 236,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 237,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 238,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 239,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 240,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 241,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 242,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 243,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 244,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 245,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 246,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 247,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 248,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 249,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 250,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 251,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 252,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 253,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 254,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 255,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 256,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 257,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 258,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 259,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 260,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 261,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 262,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 263,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 264,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 265,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 266,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 267,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 268,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 269,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 270,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 271,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 272,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 273,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 274,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 275,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 276,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 277,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 278,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 279,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 280,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 281,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 282,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 283,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 284,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 285,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 286,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 287,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 288,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 289,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 290,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 291,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 292,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 293,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 294,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 295,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 296,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 297,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 298,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 299,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 300,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 301,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 302,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 303,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 304,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 305,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 306,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 307,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 308,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 309,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 310,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 311,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 312,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 313,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 314,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 315,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 316,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 317,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 318,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 319,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 320,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 321,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 322,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 323,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 324,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 325,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 326,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 327,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 328,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 329,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 330,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 331,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 332,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 333,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 334,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 335,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 336,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 337,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 338,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 339,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 340,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 341,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 342,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 343,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 344,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 345,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 346,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 347,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 348,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 349,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 350,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 351,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 352,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 353,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 354,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 355,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 356,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 357,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 358,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 359,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 360,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 361,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 362,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 363,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 364,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 365,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 366,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 367,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 368,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 369,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 370,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 371,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 372,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 373,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 374,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 375,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 376,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 377,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 378,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 379,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 380,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 381,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 382,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 383,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 384,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 385,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 386,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 387,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 388,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 389,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 390,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 391,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 392,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 393,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 394,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 395,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 396,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 397,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 398,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 399,
+    "msgid": 30,
+    "name": "Ping"
+   }
+  ]
+ },
+ {
+  "file": "sparse.dat",
+  "ops": [
+   {
+    "op": "insert",
+    "seq": 20,
+    "name": "Ping",
+    "occupied": false,
+    "body": {
+     "n": "20"
+    }
+   },
+   {
+    "op": "insert",
+    "seq": 25,
+    "name": "Ping",
+    "occupied": true,
+    "body": {
+     "n": "25"
+    }
+   },
+   {
+    "op": "clear",
+    "seq": 35,
+    "from": "Cancel"
+   },
+   {
+    "op": "remove",
+    "seq": 45,
+    "from": "Ping"
+   },
+   {
+    "op": "field",
+    "seq": 55,
+    "name": "Order",
+    "fields": {
+     "price": "7"
+    }
+   }
+  ],
+  "out": [
+   {
+    "seq": 5,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27Z",
+      "status": "OK",
+      "order_id": "1000"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "0"
+     },
+     "price": "100.00000000",
+     "amt": "0",
+     "ratio": "0.5",
+     "ttl": "0ms",
+     "u8": "255",
+     "u16": "65535",
+     "u32": "4000000000",
+     "u64": "9223372036854775808",
+     "i16": "0",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "0"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u0"
+     }
+    }
+   },
+   {
+    "seq": 15,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.001Z",
+      "status": "Fail",
+      "order_id": "1000"
+     },
+     "symbol": "GAZP",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "101.01000000",
+     "amt": "3000000.00",
+     "ratio": "1.0",
+     "ttl": "10ms",
+     "u8": "254",
+     "u16": "65534",
+     "u32": "4000000001",
+     "u64": "9223372036854775809",
+     "i16": "-1",
+     "raw": "420001ff",
+     "arr": [
+      "0"
+     ],
+     "comment": "c1",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "1"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-1"
+      }
+     ],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "num": "1"
+     }
+    }
+   },
+   {
+    "seq": 20,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "20"
+    }
+   },
+   {
+    "seq": 25,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "25"
+    }
+   },
+   {
+    "seq": 26,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.002002Z",
+      "status": "Wait",
+      "order_id": "1001"
+     },
+     "opt": {
+      "a": "2",
+      "b": "-2"
+     }
+    }
+   },
+   {
+    "seq": 55,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.005004Z",
+      "status": "Wait",
+      "order_id": "1002"
+     },
+     "symbol": "",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "7.00000000",
+     "amt": "3000000.00",
+     "ratio": "-2.25",
+     "ttl": "50ms",
+     "u8": "250",
+     "u16": "65530",
+     "u32": "4000000005",
+     "u64": "9223372036854775813",
+     "i16": "-5",
+     "raw": "460001ff",
+     "arr": [
+      "0"
+     ],
+     "comment": "c5",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "5"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "5"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-5"
+      }
+     ],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "num": "5"
+     }
+    }
+   },
+   {
+    "seq": 65,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.006006Z",
+      "status": "OK",
+      "order_id": "1003"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "106.06000000",
+     "amt": "-1.5E+3",
+     "ratio": "0.5",
+     "ttl": "60ms",
+     "u8": "249",
+     "u16": "65529",
+     "u32": "4000000006",
+     "u64": "9223372036854775814",
+     "i16": "-6",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c6",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "6"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u6"
+     }
+    }
+   },
+   {
+    "seq": 75,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.007006Z",
+      "status": "Fail",
+      "order_id": "1003"
+     },
+     "opt": {
+      "a": "7"
+     }
+    }
+   },
+   {
+    "seq": 85,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.008008Z",
+      "status": "Wait",
+      "order_id": "1004"
+     },
+     "opt": {
+      "a": "8",
+      "b": "-8"
+     }
+    }
+   },
+   {
+    "seq": 95,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "9"
+    }
+   },
+   {
+    "seq": 105,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.010010Z",
+      "status": "Fail",
+      "order_id": "1005"
+     },
+     "symbol": "GAZP",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "110.10000000",
+     "amt": "-1.5E+3",
+     "ratio": "1.0",
+     "ttl": "100ms",
+     "u8": "245",
+     "u16": "65525",
+     "u32": "4000000010",
+     "u64": "9223372036854775818",
+     "i16": "-10",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c10",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "10"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "text": "u10"
+     }
+    }
+   },
+   {
+    "seq": 115,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.011010Z",
+      "status": "Wait",
+      "order_id": "1005"
+     },
+     "symbol": "",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "111.11000000",
+     "amt": "0.000001",
+     "ratio": "-2.25",
+     "ttl": "110ms",
+     "u8": "244",
+     "u16": "65524",
+     "u32": "4000000011",
+     "u64": "9223372036854775819",
+     "i16": "-11",
+     "raw": "4c0001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c11",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "11"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "11"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-11"
+      }
+     ],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "num": "11"
+     }
+    }
+   },
+   {
+    "seq": 125,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.012011Z",
+      "status": "OK",
+      "order_id": "1006"
+     },
+     "opt": {
+      "a": "12",
+      "b": "-12"
+     }
+    }
+   },
+   {
+    "seq": 135,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.013013Z",
+      "status": "Fail",
+      "order_id": "1006"
+     },
+     "opt": {
+      "a": "13"
+     }
+    }
+   },
+   {
+    "seq": 145,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "14"
+    }
+   },
+   {
+    "seq": 155,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.015015Z",
+      "status": "OK",
+      "order_id": "1007"
+     },
+     "symbol": "SBER",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "115.15000000",
+     "amt": "0.000001",
+     "ratio": "0.5",
+     "ttl": "150ms",
+     "u8": "240",
+     "u16": "65520",
+     "u32": "4000000015",
+     "u64": "9223372036854775823",
+     "i16": "-15",
+     "raw": "500001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c15",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "15"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-15"
+      }
+     ],
+     "tags": [],
+     "u": {
+      "num": "15"
+     }
+    }
+   },
+   {
+    "seq": 165,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.016015Z",
+      "status": "Fail",
+      "order_id": "1008"
+     },
+     "symbol": "GAZP",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "0"
+     },
+     "price": "116.16000000",
+     "amt": "0",
+     "ratio": "1.0",
+     "ttl": "160ms",
+     "u8": "239",
+     "u16": "65519",
+     "u32": "4000000016",
+     "u64": "9223372036854775824",
+     "i16": "-16",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "16"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "text": "u16"
+     }
+    }
+   },
+   {
+    "seq": 175,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.017017Z",
+      "status": "Wait",
+      "order_id": "1008"
+     },
+     "opt": {
+      "a": "17"
+     }
+    }
+   },
+   {
+    "seq": 185,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.018017Z",
+      "status": "OK",
+      "order_id": "1009"
+     },
+     "opt": {
+      "a": "18",
+      "b": "-18"
+     }
+    }
+   },
+   {
+    "seq": 195,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "19"
+    }
+   },
+   {
+    "seq": 205,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.020019Z",
+      "status": "Wait",
+      "order_id": "1010"
+     },
+     "symbol": "",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "120.20000000",
+     "amt": "0",
+     "ratio": "-2.25",
+     "ttl": "200ms",
+     "u8": "235",
+     "u16": "65515",
+     "u32": "4000000020",
+     "u64": "9223372036854775828",
+     "i16": "-20",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "20"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "20"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "text": "u20"
+     }
+    }
+   },
+   {
+    "seq": 215,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.021021Z",
+      "status": "OK",
+      "order_id": "1010"
+     },
+     "symbol": "SBER",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "121.21000000",
+     "amt": "3000000.00",
+     "ratio": "0.5",
+     "ttl": "210ms",
+     "u8": "234",
+     "u16": "65514",
+     "u32": "4000000021",
+     "u64": "9223372036854775829",
+     "i16": "-21",
+     "raw": "560001ff",
+     "arr": [
+      "0"
+     ],
+     "comment": "c21",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "21"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-21"
+      }
+     ],
+     "tags": [],
+     "u": {
+      "num": "21"
+     }
+    }
+   },
+   {
+    "seq": 225,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.022021Z",
+      "status": "Fail",
+      "order_id": "1011"
+     },
+     "opt": {
+      "a": "22",
+      "b": "-22"
+     }
+    }
+   },
+   {
+    "seq": 235,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.023023Z",
+      "status": "Wait",
+      "order_id": "1011"
+     },
+     "opt": {
+      "a": "23"
+     }
+    }
+   },
+   {
+    "seq": 245,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "24"
+    }
+   },
+   {
+    "seq": 255,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.025025Z",
+      "status": "Fail",
+      "order_id": "1012"
+     },
+     "symbol": "GAZP",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "125.25000000",
+     "amt": "3000000.00",
+     "ratio": "1.0",
+     "ttl": "250ms",
+     "u8": "230",
+     "u16": "65510",
+     "u32": "4000000025",
+     "u64": "9223372036854775833",
+     "i16": "-25",
+     "raw": "5a0001ff",
+     "arr": [
+      "0"
+     ],
+     "comment": "c25",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "25"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-25"
+      }
+     ],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "num": "25"
+     }
+    }
+   },
+   {
+    "seq": 265,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.026025Z",
+      "status": "Wait",
+      "order_id": "1013"
+     },
+     "symbol": "",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "126.26000000",
+     "amt": "-1.5E+3",
+     "ratio": "-2.25",
+     "ttl": "260ms",
+     "u8": "229",
+     "u16": "65509",
+     "u32": "4000000026",
+     "u64": "9223372036854775834",
+     "i16": "-26",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c26",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "26"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "26"
+      }
+     ],
+     "long": [],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "text": "u26"
+     }
+    }
+   },
+   {
+    "seq": 275,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.027027Z",
+      "status": "OK",
+      "order_id": "1013"
+     },
+     "opt": {
+      "a": "27"
+     }
+    }
+   },
+   {
+    "seq": 285,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.028027Z",
+      "status": "Fail",
+      "order_id": "1014"
+     },
+     "opt": {
+      "a": "28",
+      "b": "-28"
+     }
+    }
+   },
+   {
+    "seq": 295,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "29"
+    }
+   },
+   {
+    "seq": 305,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.030029Z",
+      "status": "OK",
+      "order_id": "1015"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "130.30000000",
+     "amt": "-1.5E+3",
+     "ratio": "0.5",
+     "ttl": "300ms",
+     "u8": "225",
+     "u16": "65505",
+     "u32": "4000000030",
+     "u64": "9223372036854775838",
+     "i16": "-30",
+     "raw": "ab\\0\\0",
+     "arr": [
+      "0",
+      "1"
+     ],
+     "comment": "c30",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "30"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u30"
+     }
+    }
+   },
+   {
+    "seq": 315,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.031031Z",
+      "status": "Fail",
+      "order_id": "1015"
+     },
+     "symbol": "GAZP",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "131.31000000",
+     "amt": "0.000001",
+     "ratio": "1.0",
+     "ttl": "310ms",
+     "u8": "224",
+     "u16": "65504",
+     "u32": "4000000031",
+     "u64": "9223372036854775839",
+     "i16": "-31",
+     "raw": "460001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c31",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "31"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-31"
+      }
+     ],
+     "tags": [
+      "t0"
+     ],
+     "u": {
+      "num": "31"
+     }
+    }
+   },
+   {
+    "seq": 325,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.032031Z",
+      "status": "Wait",
+      "order_id": "1016"
+     },
+     "opt": {
+      "a": "32",
+      "b": "-32"
+     }
+    }
+   },
+   {
+    "seq": 335,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.033033Z",
+      "status": "OK",
+      "order_id": "1016"
+     },
+     "opt": {
+      "a": "33"
+     }
+    }
+   },
+   {
+    "seq": 345,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "34"
+    }
+   },
+   {
+    "seq": 355,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.035035Z",
+      "status": "Wait",
+      "order_id": "1017"
+     },
+     "symbol": "",
+     "side": "Sell",
+     "flags": {
+      "ioc": "1",
+      "fok": "0",
+      "lvl": "1"
+     },
+     "price": "135.35000000",
+     "amt": "0.000001",
+     "ratio": "-2.25",
+     "ttl": "350ms",
+     "u8": "220",
+     "u16": "65500",
+     "u32": "4000000035",
+     "u64": "9223372036854775843",
+     "i16": "-35",
+     "raw": "4a0001ff",
+     "arr": [
+      "0",
+      "1",
+      "2"
+     ],
+     "comment": "c35",
+     "legs": [
+      {
+       "symbol": "L0",
+       "qty": "0"
+      },
+      {
+       "symbol": "L1",
+       "qty": "35"
+      }
+     ],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "35"
+      }
+     ],
+     "long": [
+      {
+       "symbol": "LL",
+       "qty": "-35"
+      }
+     ],
+     "tags": [
+      "t0",
+      "t1"
+     ],
+     "u": {
+      "num": "35"
+     }
+    }
+   },
+   {
+    "seq": 365,
+    "msgid": 10,
+    "name": "Order",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.036035Z",
+      "status": "OK",
+      "order_id": "1018"
+     },
+     "symbol": "SBER",
+     "side": "Buy",
+     "flags": {
+      "ioc": "0",
+      "fok": "1",
+      "lvl": "1"
+     },
+     "price": "136.36000000",
+     "amt": "0",
+     "ratio": "0.5",
+     "ttl": "360ms",
+     "u8": "219",
+     "u16": "65499",
+     "u32": "4000000036",
+     "u64": "9223372036854775844",
+     "i16": "-36",
+     "raw": "ab\\0\\0",
+     "arr": [],
+     "comment": "привет",
+     "legs": [],
+     "short": [
+      {
+       "symbol": "S",
+       "qty": "36"
+      }
+     ],
+     "long": [],
+     "tags": [],
+     "u": {
+      "text": "u36"
+     }
+    }
+   },
+   {
+    "seq": 375,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.037037Z",
+      "status": "Fail",
+      "order_id": "1018"
+     },
+     "opt": {
+      "a": "37"
+     }
+    }
+   },
+   {
+    "seq": 385,
+    "msgid": 20,
+    "name": "Cancel",
+    "data": {
+     "header": {
+      "ts": "2026-09-22T13:41:27.038037Z",
+      "status": "Wait",
+      "order_id": "1019"
+     },
+     "opt": {
+      "a": "38",
+      "b": "-38"
+     }
+    }
+   },
+   {
+    "seq": 395,
+    "msgid": 30,
+    "name": "Ping",
+    "data": {
+     "n": "39"
+    }
+   },
+   {
+    "seq": 405,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 415,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 425,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 435,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 445,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 455,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 465,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 475,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 485,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 495,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 505,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 515,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 525,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 535,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 545,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 555,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 565,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 575,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 585,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 595,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 605,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 615,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 625,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 635,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 645,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 655,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 665,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 675,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 685,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 695,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 705,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 715,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 725,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 735,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 745,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 755,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 765,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 775,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 785,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 795,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 805,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 815,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 825,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 835,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 845,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 855,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 865,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 875,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 885,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 895,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 905,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 915,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 925,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 935,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 945,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 955,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 965,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 975,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 985,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 995,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1005,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1015,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1025,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1035,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1045,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1055,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1065,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1075,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1085,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1095,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1105,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1115,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1125,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1135,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1145,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1155,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1165,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1175,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1185,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1195,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1205,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1215,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1225,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1235,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1245,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1255,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1265,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1275,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1285,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1295,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1305,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1315,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1325,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1335,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1345,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1355,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1365,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1375,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1385,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1395,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1405,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1415,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1425,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1435,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1445,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1455,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1465,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1475,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1485,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1495,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1505,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1515,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1525,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1535,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1545,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1555,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1565,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1575,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1585,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1595,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1605,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1615,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1625,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1635,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1645,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1655,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1665,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1675,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1685,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1695,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1705,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1715,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1725,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1735,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1745,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1755,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1765,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1775,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1785,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1795,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1805,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1815,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1825,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1835,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1845,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1855,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1865,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1875,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1885,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1895,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1905,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1915,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1925,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1935,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1945,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 1955,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1965,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 1975,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1985,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 1995,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2005,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2015,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2025,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2035,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2045,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2055,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2065,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2075,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2085,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2095,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2105,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2115,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2125,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2135,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2145,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2155,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2165,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2175,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2185,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2195,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2205,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2215,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2225,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2235,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2245,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2255,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2265,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2275,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2285,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2295,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2305,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2315,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2325,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2335,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2345,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2355,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2365,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2375,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2385,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2395,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2405,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2415,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2425,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2435,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2445,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2455,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2465,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2475,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2485,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2495,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2505,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2515,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2525,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2535,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2545,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2555,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2565,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2575,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2585,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2595,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2605,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2615,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2625,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2635,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2645,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2655,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2665,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2675,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2685,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2695,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2705,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2715,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2725,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2735,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2745,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2755,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2765,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2775,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2785,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2795,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2805,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2815,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2825,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2835,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2845,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2855,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2865,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2875,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2885,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2895,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2905,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2915,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2925,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2935,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2945,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 2955,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2965,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 2975,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2985,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 2995,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3005,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3015,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3025,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3035,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3045,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3055,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3065,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3075,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3085,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3095,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3105,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3115,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3125,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3135,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3145,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3155,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3165,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3175,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3185,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3195,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3205,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3215,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3225,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3235,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3245,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3255,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3265,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3275,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3285,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3295,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3305,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3315,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3325,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3335,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3345,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3355,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3365,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3375,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3385,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3395,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3405,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3415,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3425,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3435,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3445,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3455,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3465,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3475,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3485,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3495,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3505,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3515,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3525,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3535,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3545,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3555,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3565,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3575,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3585,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3595,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3605,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3615,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3625,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3635,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3645,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3655,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3665,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3675,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3685,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3695,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3705,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3715,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3725,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3735,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3745,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3755,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3765,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3775,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3785,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3795,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3805,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3815,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3825,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3835,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3845,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3855,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3865,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3875,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3885,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3895,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3905,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3915,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3925,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3935,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3945,
+    "msgid": 30,
+    "name": "Ping"
+   },
+   {
+    "seq": 3955,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3965,
+    "msgid": 10,
+    "name": "Order"
+   },
+   {
+    "seq": 3975,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3985,
+    "msgid": 20,
+    "name": "Cancel"
+   },
+   {
+    "seq": 3995,
+    "msgid": 30,
+    "name": "Ping"
+   }
+  ]
+ }
+]

@@ -1,6 +1,11 @@
 //! Запуск mutator: разбор аргументов и выбор режима — окно, терминал (`--tui`)
 //! или печать (`--dump`, `--stat`, `--dump-code`, `--dump-seq`).
 //!
+//! Вместо файла — линк (`resolve://svc/ch`, `stream+…`): [`io::link::Link`]
+//! пишет его в спул, вид открывается на спуле, когда линк стал Active; до того
+//! терминал печатает смены состояния, окно — показывает их в заглушке
+//! (`agr:link-state`). `--open` — параметры открытия, `--keep` — оставить спул.
+//!
 //! В библиотеке, а не в бинарнике: сборка с внешним бэкендом — свой бинарник,
 //! который зовёт [`crate::io::register`] и затем [`main`].
 //!
@@ -9,6 +14,7 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use crate::data::File;
 use crate::desk::Desk;
@@ -19,13 +25,22 @@ use crate::range::Range;
 use crate::ui;
 
 const USAGE: &str = "\
-mutator [FILE] [параметры] — просмотр датника
+mutator [FILE|LINK] [параметры] — просмотр датника или линка
 
   FILE                  без файла окно открывает последний или спрашивает файл;
                         для --tui, --dump и --stat файл обязателен;
                         несколько файлов одним видом: a.dat+b.dat — склейка в
                         указанном порядке, r.current.dat-3 — файл и ещё 3 более
                         старых той же ротации (номера в именах, current — последний)
+  LINK                  канал вместо файла: resolve://SERVICE/CHANNEL, stream+…,
+                        с префиксами (lua+…); только просмотр
+  --url LINK            то же, что LINK, — явно (url канала целиком)
+  --resolve HOST:PORT   resolve-сервер: для resolve:// без resolve.request и для
+                        схем по хешу (scheme=sha256://…); или MUTATOR_RESOLVE
+  --open PARAMS         параметры открытия линка: mode=online (по умолчанию),
+                        mode=initial, mode=seq;seq=N, mode=block;block=N
+  --keep DIR            спул линка оставить датником в DIR (по умолчанию —
+                        временный, удаляется при выходе)
 
   --gui                 окно, не отсоединяясь от терминала (как --foreground)
   --tui                 терминал вместо окна (в сборке без GUI — всегда терминал)
@@ -47,12 +62,15 @@ mutator [FILE] [параметры] — просмотр датника
 
 Окружение:
   MUTATOR_LUA    — путь к модулю tll-lua (…/build/tll-lua)
-  MUTATOR_PATCH  — путь к модулю tll-patch (…/build/src/tll-patch)
   MUTATOR_LIBTLL — путь к libtll, если она не в системных каталогах";
 
 #[derive(Default)]
 struct Args {
     file: Option<PathBuf>,
+    link: Option<String>,
+    resolve: Option<String>,
+    open: Option<String>,
+    keep: Option<PathBuf>,
     tui: bool,
     range: Option<String>,
     filter: Filter,
@@ -106,10 +124,15 @@ fn parse() -> Result<Args, String> {
             "--fresh" => a.fresh = true,
             "--foreground" | "-F" => a.foreground = true,
             "--gui" => a.gui = true,
+            "--url" => a.link = Some(val(&x)?),
+            "--resolve" => a.resolve = Some(val(&x)?),
+            "--open" => a.open = Some(val(&x)?),
+            "--keep" => a.keep = Some(PathBuf::from(val(&x)?)),
             "--backend" => {
                 a.backend = Some(val(&x)?.parse().map_err(|e| format!("--backend: {e}"))?)
             }
             s if s.starts_with('-') => return Err(format!("неизвестный параметр {s}")),
+            s if io::link::is_link(s) => a.link = Some(s.to_string()),
             s => a.file = Some(PathBuf::from(s.strip_prefix("file://").unwrap_or(s))),
         }
     }
@@ -120,11 +143,25 @@ fn parse() -> Result<Args, String> {
 /// `--gui` — окно: с терминалом и печатью он не сочетается, а в сборке без GUI
 /// окна нет.
 fn check(a: &Args) -> Result<(), String> {
+    if a.link.is_some() {
+        if a.stat || a.dump_seq {
+            return Err(
+                "--stat и --dump-seq — для файла; линк откройте с --keep и сведите спул".into(),
+            );
+        }
+        if a.range.is_some() {
+            return Err("-s — для файла; у линка начало задаёт --open \"mode=seq;seq=N\"".into());
+        }
+    } else if a.open.is_some() || a.keep.is_some() || a.resolve.is_some() {
+        return Err("--open, --keep и --resolve — только для линка".into());
+    }
     if !a.gui {
         return Ok(());
     }
     if !cfg!(feature = "gui") {
-        return Err("--gui: сборка без GUI, окна нет (терминал — по умолчанию, --dump — печать)".into());
+        return Err(
+            "--gui: сборка без GUI, окна нет (терминал — по умолчанию, --dump — печать)".into(),
+        );
     }
     match (a.tui, a.dump, a.stat, a.dump_seq) {
         (false, false, false, false) => Ok(()),
@@ -153,8 +190,16 @@ pub fn main() -> ExitCode {
         println!("{}", a.filter.code().unwrap_or_default());
         return ExitCode::SUCCESS;
     }
+    if let Some(r) = &a.resolve {
+        // Линк читает адрес в своём потоке — из окружения (`tll::link::preload`).
+        std::env::set_var("MUTATOR_RESOLVE", r);
+    }
+    // Спулы линков, брошенные упавшими процессами, и свои — при выходе.
+    io::link::cleanup_stale();
+    let _spools = Spools;
     let file = match a.file.clone() {
         Some(f) => Some(f),
+        None if a.link.is_some() => None,
         // Окно без аргумента: последний открытый файл; если его нет — заглушка
         // с диалогом выбора (`agr:open-without-file`).
         None if windowed(&a) => crate::recent::Recent::load().last_existing(),
@@ -165,7 +210,9 @@ pub fn main() -> ExitCode {
     };
     // Окно из терминала уходит в фон: консоль не нужна (`agr:gui-detach`).
     // Спека жива, пока разворачивается — существование проверяет разбор.
-    if file.as_ref().is_none_or(|f| crate::spec::expand(&f.to_string_lossy()).is_ok())
+    if file
+        .as_ref()
+        .is_none_or(|f| crate::spec::expand(&f.to_string_lossy()).is_ok())
         && detach(&a)
     {
         return ExitCode::SUCCESS;
@@ -230,7 +277,20 @@ fn detach(_a: &Args) -> bool {
     false
 }
 
+/// Временные спулы этого процесса удаляются при любом выходе из [`main`],
+/// и при панике тоже (`agr:link-spool`).
+struct Spools;
+
+impl Drop for Spools {
+    fn drop(&mut self) {
+        io::link::cleanup();
+    }
+}
+
 fn run(a: Args, file: Option<PathBuf>) -> Result<(), String> {
+    if let Some(url) = a.link.clone() {
+        return run_link(a, url);
+    }
     let Some(file) = file else {
         #[cfg(feature = "gui")]
         {
@@ -310,19 +370,7 @@ fn run(a: Args, file: Option<PathBuf>) -> Result<(), String> {
         };
     }
     let file = File::open_spec(&file.to_string_lossy())?;
-    let filter = a.filter.clone();
-    let start = a.range.clone();
-    let setup = move |d: &mut Desk| {
-        if !filter.is_empty() {
-            d.set_filter(filter);
-        }
-        if let Some(s) = start {
-            let begin = s.split(':').next().unwrap_or("").to_string();
-            if !begin.is_empty() {
-                d.goto(&begin);
-            }
-        }
-    };
+    let setup = setup(&a);
     // Без GUI терминал — единственный интерфейс, `--tui` не нужен.
     #[cfg(not(feature = "gui"))]
     {
@@ -335,6 +383,104 @@ fn run(a: Args, file: Option<PathBuf>) -> Result<(), String> {
         } else {
             ui::run(Some(file), session, setup)
         }
+    }
+}
+
+/// Что вид делает сразу после открытия: фильтр и место из командной строки.
+fn setup(a: &Args) -> impl FnOnce(&mut Desk) + 'static {
+    let filter = a.filter.clone();
+    let start = a.range.clone();
+    move |d: &mut Desk| {
+        if !filter.is_empty() {
+            d.set_filter(filter);
+        }
+        if let Some(s) = start {
+            let begin = s.split(':').next().unwrap_or("").to_string();
+            if !begin.is_empty() {
+                d.goto(&begin);
+            }
+        }
+    }
+}
+
+/// Линк: окно ждёт его в заглушке, терминал и печать — здесь, печатая смены
+/// состояния, пока спул не готов (`agr:link-state`).
+fn run_link(a: Args, url: String) -> Result<(), String> {
+    let open = a
+        .open
+        .clone()
+        .unwrap_or_else(|| io::link::default_open(&url));
+    #[cfg(feature = "gui")]
+    if !a.tui && !a.dump {
+        let setup = setup(&a);
+        return ui::run_link(url, open, a.keep.clone(), a.fresh, setup);
+    }
+    let link = io::link::Link::start(&url, &open, a.backend, a.keep.as_deref(), Arc::new(|| {}))?;
+    link.ready(|s| eprintln!("mutator: {}", s.line()))?;
+    if a.dump {
+        return dump_link(&a, &link);
+    }
+    let file = File::open_link(link)?;
+    let session = if a.fresh {
+        None
+    } else {
+        crate::session::load(&file.session_key())
+    };
+    let setup = setup(&a);
+    ui::tui::term::run(file, session, setup)
+}
+
+/// `--dump` линка: печатать спул по мере прихода, пока линк жив; `--once` —
+/// первое сообщение и выход.
+fn dump_link(a: &Args, link: &io::link::Link) -> Result<(), String> {
+    use crate::range::Border;
+    let stdout = std::io::stdout();
+    let color = match a.color {
+        Color::Always => true,
+        Color::Never => false,
+        Color::Auto => stdout.is_terminal(),
+    };
+    let mut printed: Option<i64> = None;
+    loop {
+        let s = link.status();
+        if let Some(last) = s.last.filter(|&l| printed.is_none_or(|p| l > p)) {
+            let d = Dump {
+                path: link.spool().to_path_buf(),
+                range: Range {
+                    begin: printed.map(|p| Border::Seq(p + 1)),
+                    end: Some(Border::Seq(last)),
+                    single: false,
+                },
+                filter: a.filter.clone(),
+                with_size: a.with_size,
+                once: a.once,
+                edits: Default::default(),
+                transform: None,
+                backend: Default::default(),
+            };
+            let mut lock = stdout.lock();
+            if color {
+                dump::run(&d, &mut Painter::new(&mut lock))?;
+            } else {
+                dump::run(&d, &mut lock)?;
+            }
+            printed = Some(last);
+            if a.once {
+                return Ok(());
+            }
+        }
+        if matches!(
+            s.state,
+            io::link::LinkState::Error | io::link::LinkState::Closed
+        ) && s.last == printed
+        {
+            eprintln!("mutator: {}", s.line());
+            return match s.state {
+                io::link::LinkState::Error => Err(s.line()),
+                _ => Ok(()),
+            };
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -352,10 +498,16 @@ mod tests {
     /// остаться, снимок для проверок, терминала на вводе нет (`.app`, скрипт).
     #[test]
     fn it_stays_attached_when_detaching_makes_no_sense() {
-        assert!(!should_detach(false, false, false, true), "терминал и печать");
+        assert!(
+            !should_detach(false, false, false, true),
+            "терминал и печать"
+        );
         assert!(!should_detach(true, true, false, true), "--foreground");
         assert!(!should_detach(true, false, true, true), "снимок окна");
-        assert!(!should_detach(true, false, false, false), "запуск не из терминала");
+        assert!(
+            !should_detach(true, false, false, false),
+            "запуск не из терминала"
+        );
     }
 
     /// `agr:gui-detach` — `--gui` оставляет окно в терминале, как `--foreground`.

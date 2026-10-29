@@ -21,15 +21,15 @@ override_dh_auto_configure:
 	# No autotools/meson; we drive cargo ourselves.
 
 override_dh_auto_build:
-	# TUI only: do not pull eframe/wgpu GUI stack.
+	# TUI only: do not pull eframe/wgpu GUI stack, keep the built-in TLL backend.
 	# This lets the package build on a headless builder without X11/Wayland/Vulkan dev packages.
-	cargo build --release --no-default-features
+	cargo build --release --no-default-features --features tll
 
 override_dh_auto_test:
 	# Packaging builds often run in restricted envs; run tests only if explicitly wanted.
 	# You can override from command line: DEB_BUILD_OPTIONS=parallel=1 dh_auto_test
 	# For now we skip to keep build times reasonable for .deb production.
-	# If you want them: cargo test --no-default-features
+	# If you want them: cargo test --no-default-features --features tll
 	true
 
 override_dh_auto_install:

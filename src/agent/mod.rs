@@ -41,7 +41,6 @@ pub use store::{CallReq, Dialog, Msg, Settings, Store, UNTITLED};
 pub use tools::{build_tools, needs_confirm};
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 use std::sync::mpsc::SyncSender as Sender;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -73,8 +72,8 @@ pub enum Act {
     /// просмотрщике не применяется). Изменяет файл так же, как человек через
     /// F4: без записи на диск, только просмотр.
     LuaTransform { code: String, enabled: bool },
-    /// Отдать виду незафиксированные правки: он перечитает файл через
-    /// `patch+` (`agr:patch-overlay`). Фиксацию агент не делает
+    /// Отдать виду незафиксированные правки: он перечитает файл с ними
+    /// (`agr:patch-overlay`). Фиксацию агент не делает
     /// (`agr:agent-no-write`). `gen` — поколение файла на момент правки:
     /// если человек успел переоткрыть файл, вид правку отбросит
     /// (`agr:agent-gen`).
@@ -89,6 +88,9 @@ pub enum Act {
 /// (`agr:agent-snap`).
 #[derive(Debug)]
 pub struct Snap {
+    /// Что открыто: вид мог переехать на другой файл или спул линка, а спул
+    /// линка растёт — агент читает то же, что вид.
+    pub file: crate::data::File,
     pub total: Option<usize>,
     pub index: Option<std::sync::Arc<crate::data::Index>>,
     pub filter: Filter,
@@ -238,9 +240,9 @@ pub struct ToolCtx {
     /// [`Act::Sync`], и вид отбрасывает правку устаревшего поколения
     /// (`agr:agent-gen`).
     pub gen: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    /// yaml незафиксированных правок, через который идёт чтение (его заводит
-    /// `ToolCtx::write_patch`]).
-    pub patch: Option<PathBuf>,
+    /// Незафиксированные правки, через которые идёт чтение (их заводит
+    /// `ToolCtx::write_patch`).
+    pub patch: Option<crate::edit::Patch>,
     /// Свободный контекст libtll для чтения в этом потоке.
     pub ctx: crate::io::Context,
     /// Число сообщений в файле: `None` — индекс ещё не готов.
@@ -249,8 +251,6 @@ pub struct ToolCtx {
     pub index: Option<std::sync::Arc<crate::data::Index>>,
     /// Канал действий для просмотрщика.
     pub acts: Option<ActTx>,
-    /// Куда писать yaml правок.
-    pub store: crate::edit::Store,
     /// Незафиксированные правки — вид их отдаёт воркеру.
     pub edits: crate::edit::Edits,
     /// Текущий Lua-transform-код (пусто — transform не задан).
@@ -281,16 +281,11 @@ impl ToolCtx {
         self.file.sources()
     }
 
-    /// Записать правки в yaml и перечитать через него: и вид, и агент видят
-    /// одну и ту же картину.
-    fn write_patch(&mut self, edits: &crate::edit::Edits) -> Result<(), String> {
-        // Читать через `patch+` умеет tll-patch; без модуля правку не проверить.
-        if !self.ctx.ensure_patch(self.file.info.backend) {
-            return Err("нет tll-patch: правки недоступны".into());
-        }
-        self.patch = self.store.write(edits)?;
+    /// Читать дальше через эти правки: и вид, и агент видят одну и ту же
+    /// картину.
+    fn write_patch(&mut self, edits: &crate::edit::Edits) {
+        self.patch = edits.patch();
         self.file.patch = self.patch.clone();
-        Ok(())
     }
 
     /// Послать действие просмотрщику.
@@ -300,8 +295,8 @@ impl ToolCtx {
         }
     }
 
-    /// Отдать виду незафиксированные правки: он перечитает файл через
-    /// `patch+`, и человек увидит то же, что читает агент (`agr:agent-same-desk`).
+    /// Отдать виду незафиксированные правки: он перечитает файл с ними, и
+    /// человек увидит то же, что читает агент (`agr:agent-same-desk`).
     /// Правка несёт поколение файла: переоткрыл человек — вид её отбросит
     /// (`agr:agent-gen`).
     fn sync(&self) {
@@ -432,7 +427,6 @@ async fn worker(
         total: None,
         index: None,
         acts: Some(acts),
-        store: crate::edit::Store::new(),
         edits: crate::edit::Edits::default(),
         lua_code: lua.code,
         lua_enabled: lua.enabled,
@@ -640,6 +634,15 @@ async fn worker(
                 }
             }
             Cmd::UpdateSnap { snap } => {
+                // Другой файл (или спул линка переехал): имя и части разные.
+                let paths = |f: &crate::data::File| -> Vec<std::path::PathBuf> {
+                    f.parts.iter().map(|p| p.path.clone()).collect()
+                };
+                if ctx.file.name != snap.file.name || paths(&ctx.file) != paths(&snap.file) {
+                    ctx.file = snap.file;
+                } else {
+                    ctx.file.info = snap.file.info;
+                }
                 ctx.total = snap.total;
                 ctx.index = snap.index;
                 ctx.filter = snap.filter;
@@ -1750,8 +1753,10 @@ mod tests {
         let _ = run_queue(&mut s, &mut c, &tx, turn);
         let evs: Vec<_> = rx.try_iter().collect();
         assert!(
-            evs.iter().any(|e| matches!(e, Ev::ToolDone { name, lines, is_error: false, .. }
-                if name == "file_overview" && *lines > 1)),
+            evs.iter().any(
+                |e| matches!(e, Ev::ToolDone { name, lines, is_error: false, .. }
+                if name == "file_overview" && *lines > 1)
+            ),
             "{evs:?}"
         );
     }

@@ -1,8 +1,7 @@
-# Образ проверок: Rust + libtll, tll-lua и tll-patch, собранные из соседних
-# исходников.
+# Образ проверок: Rust + libtll и tll-lua, собранные из соседних исходников.
 #
 # Контекст сборки собирает scripts/check.sh: этот файл и копии `../tll`,
-# `../tll-lua`, `../tll-patch` без `.git` и каталогов сборки.
+# `../tll-lua` без `.git` и каталогов сборки.
 #
 # Так проверки идут против того же tll, с которым работают стенды, а не
 # против пакета из дистрибутива.
@@ -22,9 +21,4 @@ COPY tll-lua /build/tll-lua
 RUN cd /build/tll-lua && rm -rf build b && meson setup b --prefix=/usr/local -Dwerror=false \
     && ninja -C b libtll-lua.so && install -m 644 b/libtll-lua.so /usr/local/lib/ && ldconfig
 
-COPY tll-patch /build/tll-patch
-RUN cd /build/tll-patch && rm -rf build b && meson setup b --prefix=/usr/local -Dwerror=false \
-    && ninja -C b && install -m 644 b/src/libtll-patch.so /usr/local/lib/ && ldconfig
-
 ENV TUI_PATCH_LUA=/usr/local/lib/tll-lua
-ENV TUI_PATCH_PATCH=/usr/local/lib/tll-patch

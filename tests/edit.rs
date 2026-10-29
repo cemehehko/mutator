@@ -1,4 +1,4 @@
-//! Правка полей через tll-patch: вид, проверка значения, фильтр, фиксация,
+//! Правка полей: вид, проверка значения, фильтр, фиксация,
 //! сессия. Работают на копии эталона во временном каталоге: фиксация пишет
 //! рядом с файлом.
 
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tui_patch::data::{fetch, File};
 use tui_patch::decode;
 use tui_patch::desk::{CommitMode, Desk, Focus, Key, PromptKind};
-use tui_patch::edit::{Edits, Store};
+use tui_patch::edit::Edits;
 use tui_patch::io::{self, Context, Msg, Open, Reader};
 use tui_patch::lua::Filter;
 
@@ -27,15 +27,6 @@ fn copy(test: &str) -> PathBuf {
     let p = dir.join("plain.dat");
     std::fs::copy(root().join("tests/data/plain.dat"), &p).unwrap();
     p
-}
-
-fn patch() -> bool {
-    io::quiet();
-    let ok = Context::new().ensure_patch(tui_patch::io::Backend::TLL);
-    if !ok {
-        eprintln!("нет tll-patch (MUTATOR_PATCH) — проверки правки пропущены");
-    }
-    ok
 }
 
 fn lua() -> bool {
@@ -132,9 +123,7 @@ fn field(path: &Path, seq: i64, name: &str) -> Option<String> {
 /// детали и подсвечена; файл на диске не меняется.
 #[test]
 fn edit_shows_through_patch_and_file_stays() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("overlay");
     let before = std::fs::read(&path).unwrap();
     let mut d = open(&path);
@@ -157,13 +146,11 @@ fn edit_shows_through_patch_and_file_stays() {
     assert!(d.file.patch.is_none());
 }
 
-/// `agr:edit-checked` — значение, которое tll-patch не запишет, не принимается:
+/// `agr:edit-checked` — значение, которое поле не вместит, не принимается:
 /// правок нет, строка ввода возвращается с тем же текстом.
 #[test]
 fn bad_values_are_refused() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("refused");
     let mut d = open(&path);
     for (f, v) in [
@@ -179,26 +166,22 @@ fn bad_values_are_refused() {
     }
 }
 
-/// Правки на соседних seq не мешают окну, открытому с последнего из них
-/// (исправление seek в tll-patch).
+/// Правки на соседних seq не мешают окну, открытому с последнего из них.
 #[test]
 fn window_from_seq_sees_edits_before_it() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("seek");
     let mut e = Edits::default();
     e.set(0, "Order", "header.order_id", "1000", "100");
     e.set(1, "Order", "header.order_id", "1000", "101");
     e.set(5, "Order", "header.order_id", "1002", "105");
-    let mut store = Store::new();
-    let yaml = store.write(&e).unwrap();
+    let patch = e.patch();
     let f0 = File::open(&path).unwrap();
     let srcs: Vec<_> = f0
         .raw_sources()
         .into_iter()
         .map(|mut s| {
-            s.open = s.open.patch(yaml.clone());
+            s.open = s.open.patch(patch.clone());
             s
         })
         .collect();
@@ -216,7 +199,8 @@ fn window_from_seq_sees_edits_before_it() {
 /// правка видна фильтру, он находит правленое значение, а не файловое.
 #[test]
 fn filter_sees_edited_values() {
-    if !patch() || !lua() {
+    io::quiet();
+    if !lua() {
         return;
     }
     let path = copy("filter");
@@ -244,9 +228,7 @@ fn filter_sees_edited_values() {
 /// открывает новый файл без правок.
 #[test]
 fn commit_to_new_file() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("newfile");
     let before = std::fs::read(&path).unwrap();
     let mut d = open(&path);
@@ -295,9 +277,7 @@ fn commit_to_new_file() {
 /// свободным именем, занятое имя не затирается.
 #[test]
 fn commit_over_original_keeps_backup() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("overwrite");
     let before = std::fs::read(&path).unwrap();
     let busy = path.with_file_name("plain.orig.dat");
@@ -320,9 +300,7 @@ fn commit_over_original_keeps_backup() {
 /// Занятое имя в диалоге — ошибка в диалоге, ничего не пишется.
 #[test]
 fn commit_refuses_taken_name() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("taken");
     let mut d = open(&path);
     set(&mut d, 0, "price", "12.5");
@@ -341,9 +319,7 @@ fn commit_refuses_taken_name() {
 /// сразу видны.
 #[test]
 fn edits_come_back_with_session() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("session");
     let mut d = open(&path);
     set(&mut d, 1, "header.order_id", "777");
@@ -363,9 +339,7 @@ fn edits_come_back_with_session() {
 /// `u` снимает правку поля под курсором.
 #[test]
 fn u_drops_field_edit() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("unset");
     let mut d = open(&path);
     set(&mut d, 1, "header.order_id", "777");
@@ -381,9 +355,7 @@ fn u_drops_field_edit() {
 fn tui_marks_edits_and_draws_commit_dialog() {
     use tui_patch::ui::theme::EDITED;
     use tui_patch::ui::tui::frame;
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("tui");
     let mut d = open(&path);
     set(&mut d, 1, "header.order_id", "777");
@@ -412,11 +384,12 @@ fn tui_marks_edits_and_draws_commit_dialog() {
 }
 
 /// `agr:transform-shadow` — фиксация с активным мутатором: в файл уходят и
-/// правки, и прогоные тела — полный конвейер `patch+lua+file`, ручная правка
-/// поверх мутации скрипта.
+/// правки, и прогоные тела — правки поверх transform, ручная правка поверх
+/// мутации скрипта.
 #[test]
 fn commit_applies_patches_and_transform() {
-    if !patch() || !lua() {
+    io::quiet();
+    if !lua() {
         return;
     }
     let path = copy("commitlua");
@@ -461,11 +434,12 @@ fn commit_applies_patches_and_transform() {
     assert_eq!(field(&out, 1, "header.order_id").as_deref(), Some("777"));
 }
 
-/// Порядок `patch+lua+file`: ручная правка того же поля, которое перезаписывает
+/// Порядок «transform, затем правки»: ручная правка того же поля, которое перезаписывает
 /// скрипт, побеждает — в файл уходит ручное значение, а не скриптовое.
 #[test]
 fn manual_edit_wins_over_transform() {
-    if !patch() || !lua() {
+    io::quiet();
+    if !lua() {
         return;
     }
     let path = copy("manualwins");

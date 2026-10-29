@@ -305,6 +305,13 @@ crate::dynamic_api! {
     pub fn tll_scheme_dump(s: *const tll_scheme_t, format: *const c_char) -> *mut c_char;
 
     pub fn tll_channel_post(c: *mut tll_channel_t, msg: *const tll_msg_t, flags: c_int) -> c_int;
+    /// Схема через кэш контекста: так в него попадают схемы по хешу.
+    pub fn tll_channel_context_scheme_load(
+        ctx: *mut tll_channel_context_t,
+        url: *const c_char,
+        len: c_int,
+        cache: c_int,
+    ) -> *const tll_scheme_t;
 
     pub fn tll_logger_set(name: *const c_char, len: c_int, level: c_int, subtree: c_int) -> c_int;
 }

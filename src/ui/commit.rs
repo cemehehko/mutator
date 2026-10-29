@@ -1,6 +1,6 @@
-//! Диалог фиксации правок в окне: слева — сводка и итоги, справа — yaml для
-//! tll-patch целиком, снизу — новый файл или перезапись с бэкапом и имя. Над
-//! тем же [`crate::desk::Commit`], что и наложение в TUI.
+//! Диалог фиксации правок в окне: слева — сводка и итоги, справа — те же
+//! правки yaml-командами tll-patch, снизу — новый файл или перезапись с
+//! бэкапом и имя. Над тем же [`crate::desk::Commit`], что и наложение в TUI.
 //!
 //! Наружу: [`show`].
 
@@ -47,7 +47,7 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk) {
                     }
                 });
             let ui = &mut cols[1];
-            ui.label(egui::RichText::new("yaml для tll-patch").color(DIM));
+            ui.label(egui::RichText::new("правки yaml").color(DIM));
             egui::ScrollArea::both()
                 .id_salt("yaml")
                 .max_height(h)
@@ -87,7 +87,7 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut Desk) {
         });
 
         if let Some(p) = running {
-            ui.add(egui::ProgressBar::new(p).text("пишу через tll-patch…"));
+            ui.add(egui::ProgressBar::new(p).text("пишу…"));
         }
         ui.horizontal(|ui| {
             ui.add_enabled_ui(running.is_none(), |ui| {

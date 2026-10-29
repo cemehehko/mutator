@@ -3,10 +3,9 @@
 //! [`Context`] — контекст каналов; у каждого потока свой: libtll не обещает
 //! потокобезопасность одного контекста. [`Reader`] открывает `file://` с нужного
 //! seq и отдаёт сообщения по одному. Поверх file-канала встают префиксы:
-//! `lua+` — transform ([`LuaMode::Transform`], зовёт `tll_on_data`, меняет тела) —
-//! и `patch+` из tll-patch — наложенные ручные правки (`agr:patch-overlay`).
-//! Порядок префиксов — `patch+lua+file`: `patch+` внешний, поэтому ручная правка
-//! ложится поверх мутации скрипта. [`LuaMode::Filter`] (`lua.preset=filter`,
+//! `lua+` — transform ([`LuaMode::Transform`], зовёт `tll_on_data`, меняет тела);
+//! ручные правки накладывает фасад поверх этого потока (`agr:patch-overlay`),
+//! поэтому ручная правка ложится поверх мутации скрипта. [`LuaMode::Filter`] (`lua.preset=filter`,
 //! `tll_filter`) остался только для `--dump` (печать как `tll-read -f`):
 //! экранный фильтр и поиск больше не ходят префиксом — они пост-эвал через
 //! [`Transformer::filter`] (`agr:filter-post-eval`). Цикл опроса свой: обходим
@@ -16,7 +15,8 @@
 //! Файлы: `log.rs` — ошибки журнала libtll в текст, `sys.rs` — сырые объявления C API, `convert.rs` — перенос
 //! `tll_scheme_t` в [`crate::scheme::Scheme`], `write.rs` — запись нового файла,
 //! `transform.rs` — прогон тел через Lua без чтения (`lua+direct`), `driver.rs` —
-//! TLL как бэкенд фасада (`Driver`).
+//! TLL как бэкенд фасада (`Driver`), `link.rs` — линк: любой канал по url
+//! (`resolve://`, `stream+`), его состояние и сообщения.
 //!
 //! Бэкенд TLL фасада [`crate::io`]: общие типы ([`Open`], [`Msg`], [`Info`],
 //! [`LuaMode`]) объявлены там, здесь — только их чтение и запись libtll.
@@ -26,6 +26,7 @@
 
 mod convert;
 pub mod driver;
+pub mod link;
 pub mod log;
 pub mod sys;
 mod transform;
@@ -119,16 +120,6 @@ impl Context {
         }
         let module = std::env::var("MUTATOR_LUA").unwrap_or_else(|_| "tll-lua".into());
         self.load(&module).is_ok() && self.has_impl("lua+")
-    }
-
-    /// Подгрузить tll-patch, если `patch+` ещё нет: путь — `MUTATOR_PATCH`
-    /// (`.../build/src/tll-patch`), иначе системный `tll-patch`.
-    pub fn ensure_patch(&self) -> bool {
-        if self.has_impl("patch+") {
-            return true;
-        }
-        let module = std::env::var("MUTATOR_PATCH").unwrap_or_else(|_| "tll-patch".into());
-        self.load(&module).is_ok() && self.has_impl("patch+")
     }
 
     /// Есть ли реализация канала (`lua+`).
@@ -256,13 +247,6 @@ impl Reader {
             }
             kv.extend(lua_kv(code, o.lua_mode));
             proto = format!("lua+{proto}");
-        }
-        if let Some(p) = &o.patch {
-            if !ctx.ensure_patch() {
-                return Err("правка недоступна: нет модуля tll-patch (MUTATOR_PATCH)".into());
-            }
-            kv.push(("patch", p.to_str().ok_or("путь правок не в UTF-8")?.into()));
-            proto = format!("patch+{proto}");
         }
         kv.push(("tll.proto", proto.clone()));
         let _g = lifecycle();

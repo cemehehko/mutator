@@ -235,10 +235,16 @@ mod tests {
         let d = dir(&["plain.dat", "r.current.dat", "a.dat"]);
         let err = |s: &str| expand(&in_dir(&d, s)).unwrap_err();
         assert!(err("plain.dat-3").contains("не файл ротации"));
-        assert!(err("plain.dat-0").contains("не найден"), "-0 — не число назад");
+        assert!(
+            err("plain.dat-0").contains("не найден"),
+            "-0 — не число назад"
+        );
         assert!(err("нет.dat").contains("не найден"));
         assert!(err("нет.dat-2").contains("не найден"));
         assert!(err("a.dat+").contains("пустое имя"));
-        assert!(err("a.dat+1").contains("не найден"), "плюс — не «следующий»");
+        assert!(
+            err("a.dat+1").contains("не найден"),
+            "плюс — не «следующий»"
+        );
     }
 }

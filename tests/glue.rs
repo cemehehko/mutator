@@ -5,30 +5,21 @@
 //! Работает на собранной Writer-ом ротации во временном каталоге.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tui_patch::data::{fetch, File};
 use tui_patch::decode;
 use tui_patch::desk::{Desk, Focus, Key, PromptKind};
-use tui_patch::edit::{commit, Edits, Store};
-use tui_patch::spec;
+use tui_patch::edit::{commit, Edits, Span};
 use tui_patch::io::{self, Context, Msg, Open, Reader, Writer};
+use tui_patch::spec;
 
 fn root() -> PathBuf {
     std::env::var_os("CARGO_MANIFEST_DIR")
         .map(Into::into)
         .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into())
-}
-
-fn patch() -> bool {
-    io::quiet();
-    let ok = Context::new().ensure_patch(tui_patch::io::Backend::TLL);
-    if !ok {
-        eprintln!("нет tll-patch (MUTATOR_PATCH) — проверки фиксации пропущены");
-    }
-    ok
 }
 
 /// Каталог теста: свой, чистый.
@@ -50,7 +41,11 @@ fn rotation(dir: &Path) -> Vec<Msg> {
     let mut r = Reader::open(&ctx, &Open::file(root().join("tests/data/plain.dat"))).unwrap();
     let msgs: Vec<Msg> = r.by_ref().take(250).collect();
     let mut at = 0usize;
-    for (name, n) in [("r.0.dat", 100usize), ("r.100.dat", 100), ("r.current.dat", 50)] {
+    for (name, n) in [
+        ("r.0.dat", 100usize),
+        ("r.100.dat", 100),
+        ("r.current.dat", 50),
+    ] {
         let mut w = Writer::create(&ctx, &dir.join(name), &scheme, &like)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         for m in &msgs[at..at + n] {
@@ -209,17 +204,25 @@ fn glue_reads_rotation_as_one_stream() {
     let srcs = File::open_spec(&spec).unwrap().raw_sources();
     let range = |v: &[Msg]| v.iter().map(|m| m.seq).collect::<Vec<_>>();
     // Окно вперёд через границу первой и второй части.
-    assert_eq!(range(&fetch::from_seq(&ctx, &srcs, 95, 10).unwrap()),
-               (95..105).collect::<Vec<_>>());
+    assert_eq!(
+        range(&fetch::from_seq(&ctx, &srcs, 95, 10).unwrap()),
+        (95..105).collect::<Vec<_>>()
+    );
     // Через границу второй и третьей.
-    assert_eq!(range(&fetch::from_seq(&ctx, &srcs, 197, 6).unwrap()),
-               (197..203).collect::<Vec<_>>());
+    assert_eq!(
+        range(&fetch::from_seq(&ctx, &srcs, 197, 6).unwrap()),
+        (197..203).collect::<Vec<_>>()
+    );
     // Назад через границу.
-    assert_eq!(range(&fetch::before_seq(&ctx, &srcs, 102, 5, 0).unwrap()),
-               (97..102).collect::<Vec<_>>());
+    assert_eq!(
+        range(&fetch::before_seq(&ctx, &srcs, 102, 5, 0).unwrap()),
+        (97..102).collect::<Vec<_>>()
+    );
     // Конец склейки — хвост последней части.
-    assert_eq!(range(&fetch::before_seq(&ctx, &srcs, 250, 4, 0).unwrap()),
-               (246..250).collect::<Vec<_>>());
+    assert_eq!(
+        range(&fetch::before_seq(&ctx, &srcs, 250, 4, 0).unwrap()),
+        (246..250).collect::<Vec<_>>()
+    );
     // Строка по seq в средней части.
     assert_eq!(
         fetch::row_of(&ctx, &srcs, d.index.as_ref().unwrap(), 150).unwrap(),
@@ -245,12 +248,10 @@ fn overlapping_glue_is_refused() {
 
 /// `agr:glue-commit` — фиксация склейки пишет каждую часть с правками своим
 /// файлом-тегом (число в имени — новая граница), чистую часть не трогает, один
-/// и тот же yaml раскладывается по частям сам.
+/// и тот же patch раскладывается по частям сам.
 #[test]
 fn commit_writes_each_edited_part_with_tag_names() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let d0 = dir("commit");
     let msgs = rotation(&d0);
     let spec = glue_spec(&d0);
@@ -267,13 +268,13 @@ fn commit_writes_each_edited_part_with_tag_names() {
     assert!(d.commit.is_none(), "диалог закрылся");
     assert!(d.reopen.is_none(), "склейку заново не открываем");
 
-    let (out1, out3) = (
-        d0.join("r.0.patched.dat"),
-        d0.join("r.current.patched.dat"),
-    );
+    let (out1, out3) = (d0.join("r.0.patched.dat"), d0.join("r.current.patched.dat"));
     assert!(out1.is_file(), "первая часть записана: {}", d.status);
     assert!(out3.is_file(), "третья часть записана");
-    assert!(!d0.join("r.100.patched.dat").exists(), "чистая часть не пишется");
+    assert!(
+        !d0.join("r.100.patched.dat").exists(),
+        "чистая часть не пишется"
+    );
     assert_eq!(seqs_of(&out1), (0..100).collect::<Vec<_>>());
     assert_eq!(seqs_of(&out3), (200..250).collect::<Vec<_>>());
     assert_eq!(
@@ -282,7 +283,10 @@ fn commit_writes_each_edited_part_with_tag_names() {
         "правка легла в свою часть"
     );
     assert_eq!(field(&out3, mid, "header.order_id").as_deref(), Some("778"));
-    assert!(field(&out1, mid, "header.order_id").is_none(), "чужой seq не переехал");
+    assert!(
+        field(&out1, mid, "header.order_id").is_none(),
+        "чужой seq не переехал"
+    );
 }
 
 /// Планы фиксации склейки — как их собирает диалог: части с правками, с
@@ -290,9 +294,14 @@ fn commit_writes_each_edited_part_with_tag_names() {
 fn plans(file: &File, e: &Edits, transform: bool, tag: &str, overwrite: bool) -> Vec<commit::Plan> {
     let map = e.seq_map();
     let mut out = Vec::new();
-    for p in &file.parts {
+    for (i, p) in file.parts.iter().enumerate() {
         let shift = map.before(p.begin());
-        if !transform && !e.touches(p.begin(), p.last()) && shift == 0 {
+        let span = Span {
+            from: (i > 0).then(|| p.begin()),
+            till: file.parts.get(i + 1).map(|n| n.begin()),
+        };
+        let last = span.till.map_or(i64::MAX, |t| t - 1);
+        if !transform && !e.touches(p.begin(), last) && shift == 0 {
             continue;
         }
         if overwrite && commit::growing(&p.path) {
@@ -304,6 +313,7 @@ fn plans(file: &File, e: &Edits, transform: bool, tag: &str, overwrite: bool) ->
             overwrite,
             tag: tag.into(),
             shift,
+            span,
         });
     }
     out
@@ -315,21 +325,18 @@ fn plans(file: &File, e: &Edits, transform: bool, tag: &str, overwrite: bool) ->
 /// склеивается обратно одним видом.
 #[test]
 fn renumber_crosses_parts_and_outputs_stay_glueable() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let d0 = dir("renum");
     let msgs = rotation(&d0);
     let fixed = typed(&msgs, 10, 200, 250);
     let mut e = Edits::default();
     e.delete(50, "Order", true, Some(51));
     e.set(fixed, "Order", "header.order_id", "x", "777");
-    let mut store = Store::new();
-    let yaml = store.write_full(&e).unwrap();
+    let patch = e.commit_patch();
     let file = File::open_spec(&glue_spec(&d0)).unwrap();
     let ps = plans(&file, &e, false, "patched", false);
     assert_eq!(ps.len(), 3, "средняя часть пишется со сдвигом");
-    let done = commit::run_all(&ps, yaml.as_deref(), &AtomicBool::new(false), None, |_| {}).unwrap();
+    let done = commit::run_all(&ps, patch.as_ref(), &AtomicBool::new(false), None, |_| {}).unwrap();
     assert_eq!(done.len(), 3);
 
     let (out1, out2, out3) = (
@@ -339,10 +346,17 @@ fn renumber_crosses_parts_and_outputs_stay_glueable() {
     );
     assert_eq!(
         seqs_of(&out1),
-        (0..50).chain(51..100).map(|s| if s > 50 { s - 1 } else { s }).collect::<Vec<_>>(),
+        (0..50)
+            .chain(51..100)
+            .map(|s| if s > 50 { s - 1 } else { s })
+            .collect::<Vec<_>>(),
         "удаление со сдвигом внутри первой части"
     );
-    assert_eq!(seqs_of(&out2), (99..199).collect::<Vec<_>>(), "средняя сдвинута на −1");
+    assert_eq!(
+        seqs_of(&out2),
+        (99..199).collect::<Vec<_>>(),
+        "средняя сдвинута на −1"
+    );
     assert_eq!(seqs_of(&out3), (199..249).collect::<Vec<_>>());
     // Семья склеивается обратно одним видом.
     let glued = [out1, out2.clone(), out3]
@@ -354,8 +368,50 @@ fn renumber_crosses_parts_and_outputs_stay_glueable() {
     assert_eq!((g.begin(), g.last()), (0, 248));
     // Правленное поле доехало в сдвинутую часть.
     assert_eq!(
-        field(&d0.join("r.current.patched.dat"), fixed - 1, "header.order_id").as_deref(),
+        field(
+            &d0.join("r.current.patched.dat"),
+            fixed - 1,
+            "header.order_id"
+        )
+        .as_deref(),
         Some("777")
+    );
+}
+
+/// `agr:glue-commit` — вставка пишется той частью, перед чьим seq стоит, и
+/// один раз: ранние части не дописывают её себе в хвост.
+#[test]
+fn insert_lands_once_in_its_own_part() {
+    use tui_patch::edit::Insert;
+    io::quiet();
+    let d0 = dir("insert");
+    rotation(&d0);
+    let mut e = Edits::default();
+    let ping = |n: &str| Insert {
+        name: "Ping".into(),
+        body: [("n".to_string(), n.to_string())].into(),
+        occupied: true,
+        data: Vec::new(),
+    };
+    e.insert(150, ping("150")).unwrap();
+    e.insert(100, ping("100")).unwrap();
+    let patch = e.commit_patch();
+    let file = File::open_spec(&glue_spec(&d0)).unwrap();
+    let ps = plans(&file, &e, false, "patched", false);
+    let done = commit::run_all(&ps, patch.as_ref(), &AtomicBool::new(false), None, |_| {}).unwrap();
+    assert_eq!(done.len(), 2, "первая часть без правок не пишется");
+    let out2 = d0.join("r.100.patched.dat");
+    let pings: Vec<_> = Reader::open(&Context::new(), &Open::file(&out2))
+        .unwrap()
+        .filter(|m| m.msgid == 30)
+        .map(|m| m.seq)
+        .collect();
+    // Пинги файла — 104, 109, …; вставки — 100 и 151 (после первой +1).
+    assert!(pings.contains(&100) && pings.contains(&151), "{pings:?}");
+    assert_eq!(seqs_of(&out2).len(), 102, "две вставки, по одной");
+    assert_eq!(
+        seqs_of(&d0.join("r.current.patched.dat")).first(),
+        Some(&202)
     );
 }
 
@@ -364,23 +420,23 @@ fn renumber_crosses_parts_and_outputs_stay_glueable() {
 /// перезаписью — исходник в бэкапе; поздние части сдвигаются на удалённое.
 #[test]
 fn emptied_part_writes_no_file() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let d0 = dir("empty-new");
     rotation(&d0);
     let mut e = Edits::default();
     for s in 100..200 {
         e.delete(s, "Order", true, Some(s + 1));
     }
-    let mut store = Store::new();
-    let yaml = store.write_full(&e).unwrap();
+    let patch = e.commit_patch();
     let file = File::open_spec(&glue_spec(&d0)).unwrap();
     let ps = plans(&file, &e, false, "patched", false);
     assert_eq!(ps.len(), 2, "первая чистая и не сдвинутая — не пишется");
-    let done =
-        commit::run_all(&ps, yaml.as_deref(), &AtomicBool::new(false), None, |_| {}).unwrap();
-    assert_eq!(done.iter().filter(|d| d.empty).count(), 1, "средняя опустела");
+    let done = commit::run_all(&ps, patch.as_ref(), &AtomicBool::new(false), None, |_| {}).unwrap();
+    assert_eq!(
+        done.iter().filter(|d| d.empty).count(),
+        1,
+        "средняя опустела"
+    );
     let mut outs: Vec<_> = std::fs::read_dir(&d0)
         .unwrap()
         .flatten()
@@ -389,9 +445,15 @@ fn emptied_part_writes_no_file() {
         .collect();
     outs.sort();
     assert_eq!(outs, vec!["r.current.patched.dat"], "выход — только хвост");
-    assert_eq!(seqs_of(&d0.join("r.current.patched.dat")), (100..150).collect::<Vec<_>>(),
-        "хвост сдвинут на −100");
-    assert!(d0.join("r.100.dat").is_file(), "исходник средней части на месте");
+    assert_eq!(
+        seqs_of(&d0.join("r.current.patched.dat")),
+        (100..150).collect::<Vec<_>>(),
+        "хвост сдвинут на −100"
+    );
+    assert!(
+        d0.join("r.100.dat").is_file(),
+        "исходник средней части на месте"
+    );
 
     // Перезапись: пара без растущей части, удаляем всю вторую.
     let d1 = dir("empty-ow");
@@ -400,18 +462,23 @@ fn emptied_part_writes_no_file() {
     for s in 100..200 {
         e.delete(s, "Order", true, Some(s + 1));
     }
-    let mut store = Store::new();
-    let yaml = store.write_full(&e).unwrap();
-    let spec = format!("{}+{}", d1.join("r.0.dat").display(), d1.join("r.100.dat").display());
+    let patch = e.commit_patch();
+    let spec = format!(
+        "{}+{}",
+        d1.join("r.0.dat").display(),
+        d1.join("r.100.dat").display()
+    );
     let file = File::open_spec(&spec).unwrap();
     let ps = plans(&file, &e, false, "orig", true);
     assert_eq!(ps.len(), 1, "только опустевшая часть");
-    let done =
-        commit::run_all(&ps, yaml.as_deref(), &AtomicBool::new(false), None, |_| {}).unwrap();
+    let done = commit::run_all(&ps, patch.as_ref(), &AtomicBool::new(false), None, |_| {}).unwrap();
     assert!(done[0].empty);
     assert!(d1.join("r.100.orig.dat").is_file(), "исходник — в бэкапе");
     assert!(!d1.join("r.100.dat").exists(), "пустого результата нет");
-    assert!(d1.join("r.0.dat").is_file(), "чистая первая часть не тронута");
+    assert!(
+        d1.join("r.0.dat").is_file(),
+        "чистая первая часть не тронута"
+    );
 }
 
 /// `agr:glue-commit` — перезапись ложит результат под пересчитанным именем
@@ -419,15 +486,12 @@ fn emptied_part_writes_no_file() {
 /// правильно нумерованным: `-N` разворачивается и по новым именам.
 #[test]
 fn overwrite_renames_parts_to_recalculated_names() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let d0 = dir("ow");
     rotation(&d0);
     let mut e = Edits::default();
     e.delete(50, "Order", true, Some(51));
-    let mut store = Store::new();
-    let yaml = store.write_full(&e).unwrap();
+    let patch = e.commit_patch();
     let spec = format!(
         "{}+{}",
         d0.join("r.0.dat").display(),
@@ -436,7 +500,7 @@ fn overwrite_renames_parts_to_recalculated_names() {
     let file = File::open_spec(&spec).unwrap();
     let ps = plans(&file, &e, false, "orig", true);
     assert_eq!(ps.len(), 2, "вторая часть пишется со сдвигом");
-    commit::run_all(&ps, yaml.as_deref(), &AtomicBool::new(false), None, |_| {}).unwrap();
+    commit::run_all(&ps, patch.as_ref(), &AtomicBool::new(false), None, |_| {}).unwrap();
 
     // Результаты — под пересчитанными именами, исходники — в бэкапах.
     assert_eq!(
@@ -447,7 +511,10 @@ fn overwrite_renames_parts_to_recalculated_names() {
             .collect::<Vec<_>>()
     );
     assert_eq!(seqs_of(&d0.join("r.99.dat")), (99..199).collect::<Vec<_>>());
-    assert_eq!(seqs_of(&d0.join("r.0.orig.dat")), (0..100).collect::<Vec<_>>());
+    assert_eq!(
+        seqs_of(&d0.join("r.0.orig.dat")),
+        (0..100).collect::<Vec<_>>()
+    );
     assert_eq!(
         seqs_of(&d0.join("r.100.orig.dat")),
         (100..200).collect::<Vec<_>>()
@@ -467,17 +534,14 @@ fn overwrite_renames_parts_to_recalculated_names() {
 /// флаг отмены останавливает проход.
 #[test]
 fn part_naming_key_and_guards() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let d0 = dir("key-last");
     let msgs = rotation(&d0);
     // Средняя часть названа последним seq (filename-key=last), а не первым.
     std::fs::rename(d0.join("r.100.dat"), d0.join("r.199.dat")).unwrap();
     let mut e = Edits::default();
     e.delete(50, "Order", true, Some(51));
-    let mut store = Store::new();
-    let yaml = store.write_full(&e).unwrap();
+    let patch = e.commit_patch();
     let spec = format!(
         "{}+{}",
         d0.join("r.0.dat").display(),
@@ -485,7 +549,7 @@ fn part_naming_key_and_guards() {
     );
     let file = File::open_spec(&spec).unwrap();
     let ps = plans(&file, &e, false, "patched", false);
-    commit::run_all(&ps, yaml.as_deref(), &AtomicBool::new(false), None, |_| {}).unwrap();
+    commit::run_all(&ps, patch.as_ref(), &AtomicBool::new(false), None, |_| {}).unwrap();
     // Сдвиг −1: диапазон 99..198, ключ last → имя по новому последнему.
     assert_eq!(
         seqs_of(&d0.join("r.198.patched.dat")),
@@ -502,7 +566,7 @@ fn part_naming_key_and_guards() {
         "x",
         "777",
     );
-    let yaml2 = store.write_full(&e2).unwrap();
+    let patch2 = e2.commit_patch();
     let stop = AtomicBool::new(false);
     let cur = d0.join("r.current.dat");
     let err = commit::run_all(
@@ -512,8 +576,9 @@ fn part_naming_key_and_guards() {
             overwrite: true,
             tag: "orig".into(),
             shift: 0,
+            span: Default::default(),
         }],
-        yaml2.as_deref(),
+        patch2.as_ref(),
         &stop,
         None,
         |_| {},
@@ -530,8 +595,9 @@ fn part_naming_key_and_guards() {
             overwrite: false,
             tag: "patched".into(),
             shift: 0,
+            span: Default::default(),
         }],
-        yaml2.as_deref(),
+        patch2.as_ref(),
         &stop2,
         None,
         |_| {},
@@ -541,20 +607,25 @@ fn part_naming_key_and_guards() {
     assert!(!d0.join("r.current.patched.dat").exists());
 }
 
-/// `agr:glue-commit` — негодный yaml останавливает запись части: ошибка,
-/// временный файл убран, выхода нет, исходник цел.
+/// `agr:glue-commit` — правка, которую не записать, останавливает запись
+/// части: ошибка, временный файл убран, выхода нет, исходник цел.
 #[test]
-fn broken_yaml_stops_and_cleans() {
-    if !patch() {
-        return;
-    }
+fn unwritable_edit_stops_and_cleans() {
+    io::quiet();
     let d0 = dir("broken");
-    rotation(&d0);
+    let msgs = rotation(&d0);
     let src = d0.join("r.0.dat");
     let before = std::fs::read(&src).unwrap();
     let info = File::open(&src).unwrap().parts[0].info.clone();
-    let mut store = Store::new();
-    let yaml = store.write_text("cmd: Field\n  seq: [\n").unwrap();
+    let mut e = Edits::default();
+    e.set(
+        typed(&msgs, 10, 0, 100),
+        "Order",
+        "header.order_id",
+        "x",
+        "не число",
+    );
+    let patch = e.commit_patch();
     let err = commit::run_all(
         &[commit::Plan::Part {
             src: src.clone(),
@@ -562,8 +633,9 @@ fn broken_yaml_stops_and_cleans() {
             overwrite: false,
             tag: "patched".into(),
             shift: 0,
+            span: Default::default(),
         }],
-        yaml.as_deref(),
+        patch.as_ref(),
         &AtomicBool::new(false),
         None,
         |_| {},

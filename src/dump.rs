@@ -7,8 +7,8 @@
 //! строк, похожих на числа, время и пустых.
 //!
 //! Правки и transform сессии файла (`agr:dump-mutations`): дамп показывает то,
-//! что видит пользователь, — тела читаются через `patch+lua+file`, изменённые
-//! поля помечены комментарием `# в файле: <старое>`. Фильтр при transform едет
+//! что видит пользователь, — тела читаются через transform с правками поверх,
+//! изменённые поля помечены комментарием `# в файле: <старое>`. Фильтр при transform едет
 //! как в виде: типы отбираются в Rust по `msgid`, выражение — пост-эвалом
 //! парой `tll_filter` (`agr:filter-post-eval`); без transform — кодом фильтра
 //! в канале, как у tll-read. `--once` печатает первое сообщение выборки
@@ -45,7 +45,7 @@ pub struct Dump {
     pub with_size: bool,
     /// Только первое сообщение выборки (`--once`).
     pub once: bool,
-    /// Незафиксированные правки сессии — читать через `patch+`, поля помечать.
+    /// Незафиксированные правки сессии — накладывать при чтении, поля помечать.
     pub edits: crate::edit::Edits,
     /// Код Lua-transform сессии — читать через `lua+`, изменённые поля помечать.
     pub transform: Option<String>,
@@ -83,8 +83,7 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
     if d.once {
         count = Some(1);
     }
-    let mut store = crate::edit::Store::new();
-    let patch = store.write(&d.edits)?;
+    let patch = d.edits.patch();
     // Lua-слой канала: transform — мутатор (фильтр едет пост-эвалом), иначе код
     // фильтра прямо в канале, как у tll-read.
     let chan_lua: Option<(String, LuaMode)> = if let Some(code) = &d.transform {
@@ -96,17 +95,16 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
     let start = begin
         .and_then(|s| crate::data::fetch::Src::part_of(&srcs, s))
         .unwrap_or(0);
-    let open_part = |s: &crate::data::fetch::Src,
-                     seq: Option<i64>,
-                     lua: Option<&(String, LuaMode)>| {
-        let mut o = s.open.clone();
-        o.seq = seq;
-        if let Some((c, m)) = lua {
-            o.lua = Some(c.clone());
-            o.lua_mode = Some(*m);
-        }
-        o.patch(patch.clone())
-    };
+    let open_part =
+        |s: &crate::data::fetch::Src, seq: Option<i64>, lua: Option<&(String, LuaMode)>| {
+            let mut o = s.open.clone();
+            o.seq = seq;
+            if let Some((c, m)) = lua {
+                o.lua = Some(c.clone());
+                o.lua_mode = Some(*m);
+            }
+            o.patch(patch.clone())
+        };
     // Первая часть: её открытие решает, жив ли transform (`fallback`).
     let mut fallback = false;
     let mut r = match Reader::open(&ctx, &open_part(&srcs[start], begin, chan_lua.as_ref())) {
@@ -128,7 +126,12 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
     let mut sh: Option<(crate::data::File, Transformer)> = None;
     if transforming {
         let code = d.transform.as_ref().unwrap();
-        match Transformer::new(&ctx, info.backend, code, file.scheme_url.as_deref().unwrap_or_default()) {
+        match Transformer::new(
+            &ctx,
+            info.backend,
+            code,
+            file.scheme_url.as_deref().unwrap_or_default(),
+        ) {
             Ok(tx) => sh = Some((file.clone(), tx)),
             Err(e) => eprintln!("mutator: transform: {e}"),
         }
@@ -145,13 +148,15 @@ pub fn run(d: &Dump, out: &mut dyn Write) -> Result<(), String> {
         file.scheme_url
             .clone()
             .zip(d.filter.expr_code_for(info.backend))
-            .and_then(|(url, code)| match Transformer::filter(&ctx, info.backend, &code, &url) {
-                Ok(tf) => Some(tf),
-                Err(e) => {
-                    eprintln!("mutator: filter: {e}");
-                    None
-                }
-            })
+            .and_then(
+                |(url, code)| match Transformer::filter(&ctx, info.backend, &code, &url) {
+                    Ok(tf) => Some(tf),
+                    Err(e) => {
+                        eprintln!("mutator: filter: {e}");
+                        None
+                    }
+                },
+            )
     } else {
         None
     };

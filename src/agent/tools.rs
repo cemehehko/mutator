@@ -6,7 +6,7 @@
 //!
 //! Пачковый инструмент ([`needs_confirm`]) не трогает файл: [`prepare`]
 //! собирает все правки в кандидата — поля и состав потока (удаление, смена
-//! типа, вставка; `agr:stream-ops`), — проверяет прогоном tll-patch и отдаёт
+//! типа, вставка; `agr:stream-ops`), — проверяет записью по схеме и отдаёт
 //! человеку одну сводку с прогнозом последнего seq (`agr:seq-forecast`); [`apply_batch`] применяет пачку целиком одним
 //! [`Act::Sync`]. Фиксацию агент не делает вовсе (`agr:agent-no-write`): про
 //! `w` ему напоминает системный промпт, инструмента для этого нет.
@@ -70,7 +70,7 @@ pub fn build_tools() -> Vec<Value> {
         func(
             "column_presets",
             "Column presets of the viewer and the columns they show; field paths are \
-             in tll-patch form (header.status).",
+             dotted paths (header.status).",
             json!({ "type": "object", "properties": {} }),
         ),
         func(
@@ -377,7 +377,16 @@ fn overview(ctx: &ToolCtx) -> Result<String, String> {
         .iter()
         .map(|p| std::fs::metadata(&p.path).map(|m| m.len()).unwrap_or(0))
         .sum();
-    let mut out = format!(
+    let mut out = String::new();
+    if let Some(l) = &ctx.file.link {
+        // Линк: что за канал и его состояние; файл ниже — его спул.
+        out.push_str(&format!(
+            "live link (read-only, grows by itself): {}\nlink state: {}\n",
+            l.url(),
+            l.status().line()
+        ));
+    }
+    out += &format!(
         "file: {}\nparts: {}\nsize: {bytes} bytes\nfirst seq: {}\nlast seq: {}\n",
         ctx.file.name,
         ctx.file.parts.len(),
@@ -816,20 +825,20 @@ impl Batch {
     }
 }
 
-/// Что проверить после прогона tll-patch: поле, его старое и новое значение.
-struct Want {
-    seq: i64,
-    path: String,
-    value: String,
-    current: String,
-}
-
 /// `agr:agent-batch` — собрать пачку правок одним вызовом: каждая запись
-/// проверяется по текущему значению поля, кандидат целиком прогоняется через
-/// tll-patch. Неверная пачка валится целиком и до человека не доходит — модель
+/// проверяется по текущему значению поля, кандидат целиком записывается по
+/// схеме. Неверная пачка валится целиком и до человека не доходит — модель
 /// получает отказ и чинит записи. Чтение агента на время проверки идёт через
 /// кандидата; отказ от подтверждения откатывает [`restore`].
 pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
+    if ctx.file.link.is_some() {
+        // `agr:link-read-only`: линк только смотрят — отказ модели, человека не тревожим.
+        return Err(
+            "this is a live link, not a file: it is read-only — edits are not possible; \
+             read, filter and search instead"
+                .into(),
+        );
+    }
     let args: Value = if arguments.trim().is_empty() {
         json!({})
     } else {
@@ -843,7 +852,7 @@ pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
         return Err("пустая пачка: нечего подтверждать".into());
     }
     let mut edits = ctx.edits.clone();
-    let mut wants: Vec<Want> = Vec::new();
+    let mut touched = std::collections::BTreeSet::new();
     let mut retyped: Vec<(i64, String)> = Vec::new();
     for e in list {
         let seq = e
@@ -877,12 +886,7 @@ pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
                 let current = decode::field(&scheme, st, &m.data, &path)
                     .ok_or_else(|| format!("нет поля {path} в {}", st.name))?;
                 edits.set(seq, &st.name, &path, &current, value);
-                wants.push(Want {
-                    seq,
-                    path,
-                    value: value.to_string(),
-                    current,
-                });
+                touched.insert(seq);
             }
             // Без значения — снять правку поля.
             None => {
@@ -890,8 +894,7 @@ pub fn prepare(ctx: &mut ToolCtx, arguments: &str) -> Result<Batch, String> {
             }
         }
     }
-    if let Err(e) = verify(ctx, &edits, &wants).and_then(|()| verify_stream(ctx, &edits, &retyped))
-    {
+    if let Err(e) = verify(ctx, &edits, &touched).and_then(|()| verify_stream(ctx, &retyped)) {
         restore(ctx);
         return Err(e);
     }
@@ -994,7 +997,9 @@ fn stream_op(
                 .collect();
             let body: stream::Body = fields.into_iter().collect();
             if edits.retype_many(&msgs, to, &body) == 0 {
-                return Err(format!("[{seq}, {till}): менять нечего — все уже {to} или удалены"));
+                return Err(format!(
+                    "[{seq}, {till}): менять нечего — все уже {to} или удалены"
+                ));
             }
             if let Some(first) = msgs
                 .iter()
@@ -1086,53 +1091,23 @@ fn stream_op(
     Ok(())
 }
 
-/// Собрать вставку tll-patch: тело или отказ.
+/// Собрать тело вставки по схеме: тело или отказ.
 fn check_insert(ctx: &mut ToolCtx, seq: i64, ins: &crate::edit::Insert) -> Result<Vec<u8>, String> {
-    let p = ctx
-        .store
-        .write_text(&crate::edit::Edits::insert_yaml(seq, ins))?
-        .ok_or("пустая вставка")?;
-    let srcs = ctx.file.raw_sources();
-    let Some(j) = fetch::Src::part_of(&srcs, seq) else {
+    if fetch::Src::part_of(&ctx.file.raw_sources(), seq).is_none() {
         return Err(format!("вставка перед {seq}: seq за концом файла"));
-    };
-    let open = srcs[j].open.clone().patch(Some(p)).at(seq);
-    let mut r = Reader::open(&ctx.ctx, &open).map_err(|e| format!("вставка перед {seq}: {e}"))?;
-    let m = r.next();
-    if let Some(e) = r.error().or_else(crate::tll::log::take) {
-        return Err(format!("вставка перед {seq}: {e}"));
     }
-    match m {
-        Some(m) if m.seq == seq => Ok(m.data),
-        _ => Err(format!("вставка перед {seq} не собралась")),
-    }
+    crate::edit::encode::compose(&ctx.file.scheme, &ins.name, &ins.body)
+        .map(|(_, data)| data)
+        .map_err(|e| format!("вставка перед {seq}: {e}"))
 }
 
-/// Смена типа принята tll-patch, полный yaml фиксации грузится целиком.
-fn verify_stream(
-    ctx: &mut ToolCtx,
-    edits: &crate::edit::Edits,
-    retyped: &[(i64, String)],
-) -> Result<(), String> {
+/// Смена типа записалась: сообщение читается с новым типом.
+fn verify_stream(ctx: &mut ToolCtx, retyped: &[(i64, String)]) -> Result<(), String> {
     for (seq, to) in retyped {
         let m = check(ctx, *seq).map_err(|e| format!("смена типа seq {seq}: {e}"))?;
         let got = ctx.file.scheme.message(m.msgid).map(|s| s.name.as_str());
         if got != Some(to.as_str()) {
-            return Err(format!("смена типа seq {seq} не принята tll-patch"));
-        }
-    }
-    let Some(full) = ctx.store.write_full(edits)? else {
-        return Ok(());
-    };
-    // Полный yaml грузится против каждой части склейки: команды с seq не этой
-    // части в её канале не срабатывают, но разбор и команды диапазонов — те же.
-    for s in ctx.file.raw_sources() {
-        let open = s.open.clone().patch(Some(full.clone())).meta();
-        let r = Reader::open(&ctx.ctx, &open)
-            .map_err(|e| format!("пачка не грузится в tll-patch: {e}"))?;
-        for _ in r {}
-        if let Some(e) = crate::tll::log::take() {
-            return Err(format!("пачка не грузится в tll-patch: {e}"));
+            return Err(format!("смена типа seq {seq} не записалась"));
         }
     }
     Ok(())
@@ -1161,33 +1136,24 @@ fn forecast(
     }))
 }
 
-/// Прогнать кандидата через tll-patch: каждое правленое сообщение читается с
-/// наложенным patch, журнал libtll — тоже отказ; значения сверяются с файлом.
-fn verify(ctx: &mut ToolCtx, edits: &crate::edit::Edits, wants: &[Want]) -> Result<(), String> {
-    ctx.write_patch(edits)?;
+/// Записать кандидата по схеме: каждое правленое сообщение читается с
+/// наложенными правками — значение, которое не записать, обрывает чтение.
+fn verify(
+    ctx: &mut ToolCtx,
+    edits: &crate::edit::Edits,
+    touched: &std::collections::BTreeSet<i64>,
+) -> Result<(), String> {
+    ctx.write_patch(edits);
     let mut seqs: std::collections::BTreeSet<i64> = edits.iter().map(|(s, _)| s).collect();
-    seqs.extend(wants.iter().map(|w| w.seq));
+    seqs.extend(touched);
     for seq in seqs {
-        let checked =
-            check(ctx, seq).map_err(|e| format!("правки не приняты tll-patch (seq {seq}): {e}"))?;
-        let st = ctx
-            .file
-            .scheme
-            .message(checked.msgid)
-            .ok_or_else(|| format!("тип msgid {} неизвестен", checked.msgid))?;
-        for w in wants.iter().filter(|w| w.seq == seq) {
-            let now =
-                decode::field(&ctx.file.scheme, st, &checked.data, &w.path).unwrap_or_default();
-            if now == w.current && w.current != w.value {
-                return Err(format!("правка {} не принята tll-patch", w.path));
-            }
-        }
+        check(ctx, seq).map_err(|e| format!("правки не приняты (seq {seq}): {e}"))?;
     }
     Ok(())
 }
 
 /// `agr:agent-batch` — применить подтверждённую пачку: один [`Act::Sync`] на
-/// всю пачку, вид перечитывает файл через `patch+` один раз.
+/// всю пачку, вид перечитывает файл с правками один раз.
 pub fn apply_batch(ctx: &mut ToolCtx, batch: Batch) -> String {
     ctx.edits = batch.edits;
     ctx.sync();
@@ -1207,13 +1173,12 @@ pub fn restore(ctx: &mut ToolCtx) {
         ctx.file.patch = None;
     } else {
         let edits = ctx.edits.clone();
-        let _ = ctx.write_patch(&edits);
+        ctx.write_patch(&edits);
     }
 }
 
-/// Прочитать сообщение `seq` с наложенным patch и убедиться, что tll-patch
-/// правку принял. Повторяет проверку `data::check`: старый tll-patch на
-/// неверном значении только пишет в журнал, поэтому журнал — тоже отказ.
+/// Прочитать сообщение `seq` с наложенными правками: правка, которую не
+/// записать, обрывает чтение (как `data::check`).
 fn check(ctx: &ToolCtx, seq: i64) -> Result<Msg, String> {
     let srcs = ctx.src();
     let Some(j) = fetch::Src::part_of(&srcs, seq) else {
@@ -1222,9 +1187,6 @@ fn check(ctx: &ToolCtx, seq: i64) -> Result<Msg, String> {
     let mut r = Reader::open(&ctx.ctx, &srcs[j].open.clone().at(seq))?;
     let m = r.next();
     if let Some(e) = r.error() {
-        return Err(e);
-    }
-    if let Some(e) = crate::io::take_error() {
         return Err(e);
     }
     match m {
@@ -1250,7 +1212,6 @@ pub(crate) fn tests_ctx() -> ToolCtx {
         total: None,
         index: None,
         acts: None,
-        store: crate::edit::Store::new(),
         edits: crate::edit::Edits::default(),
         lua_code: String::new(),
         lua_enabled: true,
@@ -1431,7 +1392,7 @@ mod tests {
         assert!(b.edits.is_empty(), "правка снята");
     }
 
-    /// Значение, которое tll-patch не примет, валит всю пачку и не доходит
+    /// Значение, которое поле не вместит, валит всю пачку и не доходит
     /// до человека.
     #[test]
     fn refused_value_fails_the_whole_batch() {
@@ -1459,6 +1420,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("нет поля"), "{e}");
+    }
+
+    /// `agr:link-read-only` — у линка пачка правок — отказ модели, до
+    /// человека она не доходит.
+    #[test]
+    fn link_refuses_edit_batches() {
+        let mut c = ctx();
+        let link = crate::io::link::Link::start(
+            "resolve://nosuch/x",
+            "",
+            None,
+            None,
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+        let _ = link.ready(|_| {});
+        c.file.link = Some(std::sync::Arc::new(link));
+        let e = prepare(&mut c, r#"{"edits":[{"seq":1}]}"#).unwrap_err();
+        assert!(e.contains("read-only"), "{e}");
+        let o = execute(&mut c, "file_overview", "{}").unwrap();
+        assert!(o.contains("live link") && o.contains("Error"), "{o}");
     }
 
     /// Пустая пачка и сломанные записи не доходят до подтверждения.
@@ -1511,11 +1493,17 @@ mod tests {
     #[test]
     fn batch_retypes_a_range_with_one_body() {
         let mut c = ctx();
-        let b = prepare(&mut c, r#"{"edits":[{"op":"retype","seq":10,"till":20,"type":"Ping"}]}"#)
-            .unwrap();
+        let b = prepare(
+            &mut c,
+            r#"{"edits":[{"op":"retype","seq":10,"till":20,"type":"Ping"}]}"#,
+        )
+        .unwrap();
         // 14 и 19 — уже Ping (каждое пятое): диапазон рвётся на них.
         let y = b.edits.yaml();
-        assert!(y.contains("- cmd: Update\n  from: 10\n  till: 14\n  name: 'Ping'\n  fields: {}\n"), "{y}");
+        assert!(
+            y.contains("- cmd: Update\n  from: 10\n  till: 14\n  name: 'Ping'\n  fields: {}\n"),
+            "{y}"
+        );
         assert!(y.contains("- cmd: Update\n  from: 15\n  till: 19\n"), "{y}");
         assert_eq!(y.matches("cmd: Update").count(), 2, "{y}");
     }
@@ -1604,7 +1592,10 @@ mod tests {
     fn search_messages_skips_chunks_without_matches() {
         let mut c = ctx();
         let last = c.file.info.seq_last.unwrap();
-        assert!(last > c.file.info.seq_begin.unwrap(), "нужно больше одного сообщения");
+        assert!(
+            last > c.file.info.seq_begin.unwrap(),
+            "нужно больше одного сообщения"
+        );
         let args = format!(r#"{{"expr":"seq == {last}","count":1}}"#);
         let text = execute(&mut c, "search_messages", &args).unwrap();
         assert!(text.starts_with(&format!("seq {last} ")), "{text}");

@@ -6,8 +6,7 @@
 //! растущими от текущей строки, и отдаёт ближайшее совпадение в нужную сторону.
 //!
 //! Порядок — полный конвейер (`agr:filter-post-eval`): кусок читается через
-//! [`File::source_transform`] (`patch+lua+file` — transform F4 поверх ручных
-//! правок), типы отбираются в Rust по `msgid` (без Lua, сохраняет
+//! [`File::source_transform`] (transform F4, поверх — ручные правки), типы отбираются в Rust по `msgid` (без Lua, сохраняет
 //! `meta`-оптимизацию), а выражение `f`/`t` прогоняется пост-эвалом через пару
 //! `lua+direct` ([`Transformer::filter`]). Так фильтр и поиск видят данные
 //! после transform и правок, а не сырой файл.
@@ -20,7 +19,7 @@
 //! [`Transformer`] создаётся один раз на worker-поток (не на кусок) — см.
 //! [`super::chunks::run_state`].
 //!
-//! Наружу: [`Matches`], [`filter`], [`search`].
+//! Наружу: [`Matches`], [`filter`], [`filter_range`], [`search`].
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -153,15 +152,29 @@ fn chunk(
 }
 
 /// Куски всех частей по порядку: `(кусок, часть)`; байты — для числа потоков.
-fn plan_all(f: &File, per_thread: usize) -> (Vec<Src>, Vec<(Chunk, usize)>, u64) {
+/// `range` — только эти seq (хвост растущего спула, `agr:link-tail`).
+fn plan_all(
+    f: &File,
+    per_thread: usize,
+    range: Option<(i64, i64)>,
+) -> (Vec<Src>, Vec<(Chunk, usize)>, u64) {
     let srcs = f.source_transform();
     let mut list = Vec::new();
     let mut bytes_all = 0u64;
     for (i, s) in srcs.iter().enumerate() {
-        let bytes = std::fs::metadata(&s.open.path).map(|m| m.len()).unwrap_or(0);
+        let (begin, last) = match range {
+            Some((b, l)) => (s.begin.max(b), s.last.min(l)),
+            None => (s.begin, s.last),
+        };
+        if begin > last {
+            continue;
+        }
+        let bytes = std::fs::metadata(&s.open.path)
+            .map(|m| m.len())
+            .unwrap_or(0);
         bytes_all += bytes;
         list.extend(
-            chunks::even(s.begin, s.last, chunks::count(bytes, per_thread))
+            chunks::even(begin, last, chunks::count(bytes, per_thread))
                 .into_iter()
                 .map(|c| (c, i)),
         );
@@ -170,14 +183,21 @@ fn plan_all(f: &File, per_thread: usize) -> (Vec<Src>, Vec<(Chunk, usize)>, u64)
 }
 
 /// Отфильтровать файл в `m`; `tick` — после каждого готового куска.
-pub fn filter(
+pub fn filter(f: &File, filter: &Filter, stop: &Arc<AtomicBool>, m: &Matches, tick: impl FnMut()) {
+    filter_range(f, filter, None, stop, m, tick)
+}
+
+/// [`filter`] только по seq из `range` — хвост растущего спула
+/// (`agr:link-tail`).
+pub fn filter_range(
     f: &File,
     filter: &Filter,
+    range: Option<(i64, i64)>,
     stop: &Arc<AtomicBool>,
     m: &Matches,
     mut tick: impl FnMut(),
 ) {
-    let (srcs, list, bytes) = plan_all(f, 16);
+    let (srcs, list, bytes) = plan_all(f, 16, range);
     let ranges: Vec<Chunk> = list.iter().map(|&(c, _)| c).collect();
     let n = ranges.len().max(1);
     let factory = EvalFactory {
@@ -248,7 +268,9 @@ pub fn search(
     };
     for (k, &i) in order.iter().enumerate() {
         let s = &srcs[i];
-        let bytes = std::fs::metadata(&s.open.path).map(|m| m.len()).unwrap_or(0);
+        let bytes = std::fs::metadata(&s.open.path)
+            .map(|m| m.len())
+            .unwrap_or(0);
         bytes_all += bytes;
         let span = (s.last - s.begin).max(1);
         let max = (span / chunks::count(bytes, 4) as i64).max(4096);

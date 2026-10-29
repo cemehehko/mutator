@@ -1,4 +1,4 @@
-//! Состав потока на живом tll-patch: удаление, вставка, смена типа, прогноз
+//! Состав потока: удаление, вставка, смена типа, прогноз
 //! последнего seq и фиксация (`agr:stream-ops`, `agr:view-input-seq`,
 //! `agr:seq-forecast`, `agr:commit-seq-check`). Работают на копии эталона во
 //! временном каталоге: фиксация пишет рядом с файлом.
@@ -12,7 +12,7 @@ use tui_patch::data::{fetch, File};
 use tui_patch::decode;
 use tui_patch::desk::{Desk, Focus, Key, PromptKind};
 use tui_patch::edit::commit::{self, Target};
-use tui_patch::edit::{stream, Edits, Insert, Store};
+use tui_patch::edit::{stream, Edits, Insert};
 use tui_patch::io::{self, Context, Msg, Open, Reader};
 
 fn root() -> PathBuf {
@@ -29,15 +29,6 @@ fn copy(name: &str, test: &str) -> PathBuf {
     let p = dir.join(format!("{name}.dat"));
     std::fs::copy(root().join(format!("tests/data/{name}.dat")), &p).unwrap();
     p
-}
-
-fn patch() -> bool {
-    io::quiet();
-    let ok = Context::new().ensure_patch(tui_patch::io::Backend::TLL);
-    if !ok {
-        eprintln!("нет tll-patch (MUTATOR_PATCH) — проверки состава потока пропущены");
-    }
-    ok
 }
 
 fn lua() -> bool {
@@ -78,15 +69,14 @@ fn commit_and_forecast(path: &Path, e: &Edits, out: &str) -> (Option<i64>, Vec<M
     )
     .unwrap();
     let forecast = map.last(last, alive);
-    let mut store = Store::new();
-    let yaml = store.write_full(e).unwrap();
+    let patch = e.commit_patch();
     let target = path.with_file_name(out);
     let done = commit::run_all(
         &[commit::Plan::Single {
             src: path.to_path_buf(),
             target: Target::NewFile(target.clone()),
         }],
-        yaml.as_deref(),
+        patch.as_ref(),
         &AtomicBool::new(false),
         None,
         |_| {},
@@ -105,14 +95,11 @@ fn commit_and_forecast(path: &Path, e: &Edits, out: &str) -> (Option<i64>, Vec<M
 }
 
 /// `agr:seq-forecast` `agr:commit-seq-check` `agr:stream-ops` — прогноз по
-/// правкам совпадает с настоящим последним seq после записи через tll-patch,
-/// и каждое сообщение ложится на предсказанный seq: сторожит и прогноз, и
-/// перенумерацию tll-patch.
+/// правкам совпадает с настоящим последним seq после записи, и каждое
+/// сообщение ложится на предсказанный seq: сторожит и прогноз, и перенумерацию.
 #[test]
 fn forecast_matches_real_last_seq_after_commit() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     for name in ["plain", "sparse"] {
         let path = copy(name, &format!("forecast-{name}"));
         let src = all(&path);
@@ -196,7 +183,8 @@ fn forecast_matches_real_last_seq_after_commit() {
 /// местом; исходник цел, результата нет.
 #[test]
 fn duplicate_seq_from_transform_stops_commit_and_keeps_source() {
-    if !patch() || !lua() {
+    io::quiet();
+    if !lua() {
         return;
     }
     let path = copy("plain", "dup");
@@ -280,9 +268,7 @@ fn tag(d: &Desk, seq: i64) -> String {
 /// возвращает удалённое.
 #[test]
 fn deleted_row_stays_marked_and_u_restores_it() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("plain", "delete");
     let mut d = open(&path);
     select(&mut d, 5);
@@ -302,9 +288,7 @@ fn deleted_row_stays_marked_and_u_restores_it() {
 /// `agr:stream-ops` — диапазон от метки `v` удаляется дырой одной командой.
 #[test]
 fn range_delete_by_mark_becomes_one_command() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("plain", "range");
     let mut d = open(&path);
     select(&mut d, 10);
@@ -327,9 +311,7 @@ fn range_delete_by_mark_becomes_one_command() {
 /// текущим, её поле правится в детали; после записи она на своём seq.
 #[test]
 fn inserted_copy_appears_before_current_and_its_field_is_editable() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("plain", "insert");
     let mut d = open(&path);
     select(&mut d, 6);
@@ -344,7 +326,7 @@ fn inserted_copy_appears_before_current_and_its_field_is_editable() {
     assert_eq!(d.rows[i + 1].seq, 6);
     assert_eq!(d.rows[i].tag.as_deref(), Some("+6"));
     assert_eq!(tag(&d, 6), "6→7");
-    assert!(!d.rows[i].data.is_empty(), "тело вставки от tll-patch");
+    assert!(!d.rows[i].data.is_empty(), "тело вставки собрано");
 
     d.select(i);
     key(&mut d, Key::Enter);
@@ -392,32 +374,28 @@ fn inserted_copy_appears_before_current_and_its_field_is_editable() {
     assert_eq!(got.len(), all(&path).len() + 1);
 }
 
-/// `agr:edit-checked` — копия, которую tll-patch не запишет точно (байты вне
-/// ASCII), не принимается: вставки нет, причина — в строке состояния.
+/// `agr:edit-checked` — копия сообщения с байтами вне ASCII ложится точно:
+/// тело вставки по полям совпадает с исходником.
 #[test]
-fn inexact_copy_is_refused() {
-    if !patch() {
-        return;
-    }
+fn copy_with_non_ascii_bytes_is_exact() {
+    io::quiet();
     let path = copy("plain", "inexact");
+    let src = all(&path).into_iter().find(|m| m.seq == 1).unwrap();
     let mut d = open(&path);
     select(&mut d, 1);
     key(&mut d, Key::Char('o'));
-    assert!(d.edits.is_empty(), "{}", d.status);
-    assert!(
-        d.status.contains("копия неточна") && d.status.contains("raw"),
-        "{}",
-        d.status
-    );
+    assert_eq!(d.edits.count(), 1, "{}", d.status);
+    let f = File::open(&path).unwrap();
+    let st = f.scheme.message(src.msgid).unwrap();
+    let copy = &d.edits.inserts(1)[0].data;
+    assert!(decode::diff(&f.scheme, st, &src.data, copy).is_empty());
 }
 
 /// `agr:edit-checked` `agr:stream-ops` — смена типа переносит одноимённые поля
 /// и видна в виде, пока не зафиксирована.
 #[test]
 fn retype_carries_same_named_fields() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("plain", "retype");
     let mut d = open(&path);
     select(&mut d, 1);
@@ -443,9 +421,7 @@ fn retype_carries_same_named_fields() {
 #[test]
 fn commit_dialog_first_line_says_whether_last_seq_changes() {
     use tui_patch::ui::tui::frame;
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("plain", "headline");
     let mut d = open(&path);
     select(&mut d, 3);
@@ -494,9 +470,7 @@ fn commit_new(d: &mut Desk) -> PathBuf {
 /// выбранных, тела одинаковые, seq и последний seq прежние.
 #[test]
 fn range_retype_by_mark_writes_one_update() {
-    if !patch() {
-        return;
-    }
+    io::quiet();
     let path = copy("plain", "range-retype");
     let ping = {
         let f = File::open(&path).unwrap();
@@ -548,7 +522,8 @@ fn range_retype_by_mark_writes_one_update() {
 /// Order на экране стали Ping, Cancel между ними не тронуты.
 #[test]
 fn filtered_range_retype_touches_only_found() {
-    if !patch() || !lua() {
+    io::quiet();
+    if !lua() {
         return;
     }
     let path = copy("plain", "filter-retype");

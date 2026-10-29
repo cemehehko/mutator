@@ -82,6 +82,110 @@ fn decode_matches_python_tll_on_fixtures() {
     }
 }
 
+/// `agr:stream-ops` `agr:edit-encode` — состав потока даёт тот же поток, что
+/// настоящий tll-patch: `tests/data/stream.json` пишет `scripts/golden.py`
+/// (удаление со сдвигом и дырой, смена типа, вставки в живой seq и в дыру,
+/// тела со списками всех offset-ptr, правки полей после сдвига).
+#[test]
+fn stream_matches_tll_patch() {
+    use tui_patch::edit::{Body, Edits, Insert};
+    tui_patch::io::quiet();
+    let dir = root().join("tests/data");
+    let cases: Vec<J> =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("stream.json")).unwrap()).unwrap();
+    let body = |v: &J| -> Body {
+        v.as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, x)| (k.clone(), x.as_str().unwrap().to_string()))
+            .collect()
+    };
+    for c in &cases {
+        let mut e = Edits::default();
+        for o in c["ops"].as_array().unwrap() {
+            let seq = o["seq"].as_i64().unwrap();
+            let s = |k: &str| o[k].as_str().unwrap_or_default().to_string();
+            match o["op"].as_str().unwrap() {
+                "remove" => e.delete(seq, &s("from"), true, None),
+                "clear" => e.delete(seq, &s("from"), false, None),
+                "retype" => e
+                    .retype(seq, &s("from"), &s("name"), body(&o["body"]))
+                    .unwrap(),
+                "insert" => {
+                    let ins = Insert {
+                        name: s("name"),
+                        body: body(&o["body"]),
+                        occupied: o["occupied"].as_bool().unwrap(),
+                        data: Vec::new(),
+                    };
+                    e.insert(seq, ins).unwrap();
+                }
+                "field" => {
+                    for (path, v) in body(&o["fields"]) {
+                        e.set(seq, &s("name"), &path, "\u{0}", &v);
+                    }
+                }
+                op => panic!("op {op}"),
+            }
+        }
+        let ctx = Context::new();
+        let src = Open::file(dir.join(c["file"].as_str().unwrap())).patch(e.commit_patch());
+        let mut r = Reader::open(&ctx, &src).unwrap();
+        let scheme = r.scheme().expect("схема в файле");
+        let got: Vec<_> = r.by_ref().collect();
+        assert_eq!(r.error(), None);
+        let want = c["out"].as_array().unwrap();
+        assert_eq!(got.len(), want.len(), "{}", c["file"]);
+        for (m, w) in got.iter().zip(want) {
+            let st = scheme.message(m.msgid).unwrap();
+            assert_eq!(
+                (m.seq, st.name.as_str()),
+                (w["seq"].as_i64().unwrap(), w["name"].as_str().unwrap())
+            );
+            if !w["data"].is_null() {
+                let d = to_json(&decode::decode(&scheme, st, &m.data));
+                assert_eq!(d, w["data"], "{} seq {}", c["file"], m.seq);
+            }
+        }
+    }
+}
+
+/// `agr:edit-encode` — свои правки дают то же тело, что настоящий tll-patch:
+/// `tests/data/patch.json` пишет `scripts/golden.py` прогоном тех же правок
+/// через `patch+file://` (все виды скаляров, offset-строка, вариант union,
+/// поле за pmap).
+#[test]
+fn edits_match_tll_patch() {
+    tui_patch::io::quiet();
+    let dir = root().join("tests/data");
+    let want: Vec<J> =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("patch.json")).unwrap()).unwrap();
+    let mut edits = tui_patch::edit::Edits::default();
+    for w in &want {
+        let seq = w["seq"].as_i64().unwrap();
+        for (path, v) in w["edits"].as_object().unwrap() {
+            // «Было» — заведомо не новое: иначе `set` сочтёт правку снятой.
+            let new = v.as_str().unwrap();
+            edits.set(seq, w["name"].as_str().unwrap(), path, "\u{0}", new);
+        }
+    }
+    let ctx = Context::new();
+    let src = Open::file(dir.join("plain.dat")).patch(edits.patch());
+    let r = Reader::open(&ctx, &src).unwrap();
+    let scheme = r.scheme().expect("схема в файле");
+    let got: HashMap<i64, J> = r
+        .filter(|m| edits.message(m.seq).is_some())
+        .map(|m| {
+            let st = scheme.message(m.msgid).unwrap();
+            (m.seq, to_json(&decode::decode(&scheme, st, &m.data)))
+        })
+        .collect();
+    for w in &want {
+        let seq = w["seq"].as_i64().unwrap();
+        assert_eq!(got.get(&seq), Some(&w["data"]), "seq {seq}");
+    }
+}
+
 /// Живой файл со стенда — по переменной окружения.
 #[test]
 fn decode_matches_python_tll_on_live_file() {
@@ -238,21 +342,10 @@ fn stat_counts_messages_by_type() {
     assert_eq!(counts, sorted);
 }
 
-fn patch_ready() -> bool {
-    let ok = tui_patch::io::Context::new().ensure_patch(tui_patch::io::Backend::TLL);
-    if !ok {
-        eprintln!("нет tll-patch (MUTATOR_PATCH) — проверки правки пропущены");
-    }
-    ok
-}
-
 /// `agr:dump-mutations` — правки сессии применяются, изменённые поля помечены
 /// комментарием со значением из файла.
 #[test]
 fn dump_applies_edits_and_marks_changed_fields() {
-    if !patch_ready() {
-        return;
-    }
     let mut e = tui_patch::edit::Edits::default();
     // seq 5, Order: в файле price = 100.00000000.
     e.set(5, "Order", "price", "100.00000000", "777");

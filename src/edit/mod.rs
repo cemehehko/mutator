@@ -1,36 +1,41 @@
-//! Правки полей: что поменяно, yaml для tll-patch и сводка для диалога фиксации.
+//! Правки полей и состава потока: что поменяно, наложение при чтении и сводка
+//! для диалога фиксации.
 //!
-//! Правка — новое значение поля сообщения по пути tll-patch (`header.status`,
-//! `agr:patch-path`). Все правки одного сообщения — одна команда `Field`: на
-//! один seq tll-patch берёт только одну. Значение пишется текстом, как его
-//! показывает деталь и как его разбирает tll-patch (enum — имя, bits — `a|b`,
-//! Decimal и время — строкой). Вернуть полю старое значение — снять правку.
+//! Правка — новое значение поля сообщения по пути (`header.status`,
+//! `agr:patch-path`), текстом, как его показывает деталь (enum — имя, bits —
+//! `a|b`, Decimal и время — строкой). Вернуть полю старое значение — снять
+//! правку.
 //!
-//! Файл не меняется: вид читает его через tll-patch с yaml из [`Store`]
-//! (`agr:patch-overlay`); каждая версия правок — новый файл, чтобы чтения в
-//! полёте дочитали свою. Правки переживают перезапуск в сессии файла
-//! ([`Saved`], `agr:edits-in-session`). Записать новый файл — `commit.rs`.
+//! Файл не меняется: чтение накладывает правки поверх потока бэкенда
+//! ([`Patch`] в [`crate::io::Open`], `agr:patch-overlay`), пишет их в тела
+//! `encode.rs` по схеме (`agr:edit-encode`) — без внешних модулей, для любого
+//! формата. Каждая версия правок — свой снимок, чтения в полёте дочитывают
+//! свою. Правки переживают перезапуск в сессии файла ([`Saved`],
+//! `agr:edits-in-session`). Записать новый файл — `commit.rs`.
 //!
 //! Кроме полей — состав потока: удаление, смена типа и вставка
-//! (`agr:stream-ops`, `stream.rs`). Вид читает yaml только с `Field` и
-//! `Update` ([`Store::write`]), фиксация — полный, с перенумерацией
-//! ([`Edits::yaml`], `agr:view-input-seq`).
+//! (`agr:stream-ops`, `stream.rs`). Вид накладывает только поля и смену типа
+//! ([`Edits::patch`]), фиксация — всё, с перенумерацией ([`Edits::commit_patch`],
+//! `agr:view-input-seq`). [`Edits::yaml`] — те же правки командами tll-patch:
+//! показ в диалоге фиксации и перенос в tll-patch.
 //!
-//! Файлы: `commit.rs` — фиксация: прогон файла через tll-patch в новый файл,
-//! свободные имена, бэкап; `stream.rs` — операции над составом потока и
-//! прогноз seq после записи.
+//! Файлы: `encode.rs` — запись значений и тел по схеме, поток фиксации;
+//! `commit.rs` — фиксация: прогон файла через правки в новый файл, свободные
+//! имена, бэкап; `stream.rs` — операции над составом потока и прогноз seq
+//! после записи.
 //!
 //! Наружу: [`Edits`], [`MsgEdit`], [`FieldEdit`], [`Summary`], [`Saved`],
-//! [`SavedOp`], [`Store`], [`commit`], [`stream`]; из `stream.rs` — [`Op`],
-//! [`Insert`], [`Body`], [`SeqMap`], [`Forecast`].
+//! [`SavedOp`], [`Patch`], [`Span`], [`commit`], [`encode`], [`stream`]; из
+//! `stream.rs` — [`Op`], [`Insert`], [`Body`], [`SeqMap`], [`Forecast`].
 
 pub mod commit;
+pub mod encode;
 pub mod stream;
 
 pub use stream::{Body, Forecast, Insert, Op, SeqMap};
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +49,7 @@ pub struct FieldEdit {
 /// Правки одного сообщения.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MsgEdit {
-    /// Тип сообщения: tll-patch сверяет его с телом.
+    /// Тип сообщения: запись сверяет его с телом.
     pub name: String,
     /// Путь поля → правка.
     pub fields: BTreeMap<String, FieldEdit>,
@@ -87,9 +92,27 @@ pub struct SavedOp {
     pub next: Option<i64>,
     #[serde(default)]
     pub occupied: bool,
-    /// Для вставки — тело от tll-patch, hex.
+    /// Для вставки — собранное тело, hex.
     #[serde(default)]
     pub data: String,
+}
+
+/// Правки для чтения (`agr:patch-overlay`): снимок правок и что из них
+/// накладывать.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Patch {
+    pub edits: Arc<Edits>,
+    /// Состав потока — вставки, удаления, сдвиг seq — для фиксации с начала
+    /// файла; `None` — вид: только поля и смена типа (`agr:view-input-seq`).
+    pub stream: Option<Span>,
+}
+
+/// Чьи вставки пишет чтение: перед входным seq из `[from, till)`; `None` — без
+/// границы. У части склейки — свой отрезок (`agr:glue-commit`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Span {
+    pub from: Option<i64>,
+    pub till: Option<i64>,
 }
 
 /// Сводка для диалога фиксации: строка на поле и итоги.
@@ -256,7 +279,7 @@ impl Edits {
         true
     }
 
-    /// Тело `k`-й вставки перед seq, собранное tll-patch.
+    /// Тело `k`-й вставки перед seq, собранное при проверке.
     pub fn set_insert_data(&mut self, seq: i64, k: usize, data: Vec<u8>) {
         if let Some(i) = self.inserts.get_mut(&seq).and_then(|v| v.get_mut(k)) {
             i.data = data;
@@ -349,36 +372,35 @@ impl Edits {
         had
     }
 
-    /// Полный yaml команд tll-patch — для фиксации: `Field` на сообщение,
-    /// `Update` на смену типа, `Remove`/`Clear` (подряд идущие — одним
-    /// диапазоном `from`/`till`), `Insert`. Значения — строками в одинарных
-    /// кавычках (tll-config сам приводит их к типу поля).
+    /// Правки для вида: поля и смена типа — они не перенумеровывают, и чтение с
+    /// середины файла их не путает (`agr:view-input-seq`); `None` — таких нет,
+    /// файл читается как есть.
+    pub fn patch(&self) -> Option<Patch> {
+        let retyped = self.ops.values().any(|o| matches!(o, Op::Retype { .. }));
+        (!self.msgs.is_empty() || retyped).then(|| Patch {
+            edits: Arc::new(self.clone()),
+            stream: None,
+        })
+    }
+
+    /// Правки для фиксации: всё, с вставками, удалениями и сдвигом seq;
+    /// `None` — правок нет.
+    pub fn commit_patch(&self) -> Option<Patch> {
+        (!self.is_empty()).then(|| Patch {
+            edits: Arc::new(self.clone()),
+            stream: Some(Span::default()),
+        })
+    }
+
+    /// Правки командами tll-patch — для диалога фиксации и переноса в
+    /// tll-patch: `Field` на сообщение, `Update` на смену типа, `Remove`/`Clear`
+    /// (подряд идущие — одним диапазоном `from`/`till`), `Insert`. Значения —
+    /// строками в одинарных кавычках (tll-config сам приводит их к типу поля).
     pub fn yaml(&self) -> String {
-        self.commands(true)
-    }
-
-    /// yaml для вида: только `Field` и `Update` — они не перенумеровывают, и
-    /// чтение с середины файла их не путает (`agr:view-input-seq`).
-    pub fn view_yaml(&self) -> String {
-        self.commands(false)
-    }
-
-    /// Одна команда `Insert` — проверить вставку до принятия.
-    pub fn insert_yaml(seq: i64, ins: &Insert) -> String {
-        format!(
-            "- cmd: Insert\n  seq: {seq}\n  name: {}\n{}",
-            quote(&ins.name),
-            fields_yaml(&ins.body)
-        )
-    }
-
-    fn commands(&self, full: bool) -> String {
         let mut out = String::new();
         let mut seqs: std::collections::BTreeSet<i64> = self.msgs.keys().copied().collect();
         seqs.extend(self.ops.keys().copied());
-        if full {
-            seqs.extend(self.inserts.keys().copied());
-        }
+        seqs.extend(self.inserts.keys().copied());
         // Незакрытый диапазон: (что, from, последний, следующий seq файла).
         let mut run: Option<(Run, i64, i64, Option<i64>)> = None;
         let flush = |out: &mut String, run: &mut Option<(Run, i64, i64, Option<i64>)>| {
@@ -420,20 +442,20 @@ impl Edits {
             }
         };
         for seq in seqs {
-            if full {
-                if let Some(v) = self.inserts.get(&seq) {
-                    // Вставка перед seq рвёт диапазон: она между удалёнными.
-                    flush(&mut out, &mut run);
-                    for ins in v {
-                        out.push_str(&Self::insert_yaml(seq, ins));
-                    }
+            if let Some(v) = self.inserts.get(&seq) {
+                // Вставка перед seq рвёт диапазон: она между удалёнными.
+                flush(&mut out, &mut run);
+                for ins in v {
+                    out.push_str(&format!(
+                        "- cmd: Insert\n  seq: {seq}\n  name: {}\n{}",
+                        quote(&ins.name),
+                        fields_yaml(&ins.body)
+                    ));
                 }
             }
             match self.ops.get(&seq) {
                 Some(Op::Delete { renumber, next, .. }) => {
-                    if full {
-                        extend(&mut out, &mut run, Run::Delete(*renumber), seq, *next);
-                    }
+                    extend(&mut out, &mut run, Run::Delete(*renumber), seq, *next);
                 }
                 Some(Op::Retype {
                     name, body, next, ..
@@ -688,60 +710,6 @@ fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// Версии yaml правок во временном каталоге процесса; каталог убирается вместе
-/// со [`Store`].
-#[derive(Debug)]
-pub struct Store {
-    dir: PathBuf,
-    n: u64,
-}
-
-impl Default for Store {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Store {
-    pub fn new() -> Store {
-        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let k = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Store {
-            dir: std::env::temp_dir().join(format!("tui-patch-{}-{k}", std::process::id())),
-            n: 0,
-        }
-    }
-
-    /// Записать новую версию yaml для вида ([`Edits::view_yaml`]); `None` —
-    /// читать файл как есть.
-    pub fn write(&mut self, e: &Edits) -> Result<Option<PathBuf>, String> {
-        self.write_text(&e.view_yaml())
-    }
-
-    /// Записать полный yaml для фиксации ([`Edits::yaml`]).
-    pub fn write_full(&mut self, e: &Edits) -> Result<Option<PathBuf>, String> {
-        self.write_text(&e.yaml())
-    }
-
-    /// Записать yaml как есть; пустой — `None`.
-    pub fn write_text(&mut self, yaml: &str) -> Result<Option<PathBuf>, String> {
-        if yaml.is_empty() {
-            return Ok(None);
-        }
-        std::fs::create_dir_all(&self.dir).map_err(|x| format!("{}: {x}", self.dir.display()))?;
-        self.n += 1;
-        let p = self.dir.join(format!("patch-{}.yaml", self.n));
-        std::fs::write(&p, yaml).map_err(|x| format!("{}: {x}", p.display()))?;
-        Ok(Some(p))
-    }
-}
-
-impl Drop for Store {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -876,8 +844,7 @@ mod tests {
         assert!(e.is_empty());
     }
 
-    /// `agr:stream-ops` `agr:view-input-seq` — смена типа и правки её полей —
-    /// одна команда `Update`; вид её видит, удаления и вставки — нет.
+    /// `agr:stream-ops` — смена типа и правки её полей — одна команда `Update`.
     #[test]
     fn retype_absorbs_field_edits_into_one_update() {
         let mut e = Edits::default();
@@ -892,8 +859,6 @@ mod tests {
             y.starts_with("- cmd: Update\n  seq: 5\n  name: 'Cancel'\n  fields:\n    header:\n      id: '7'\n    reason: '3'\n"),
             "{y}"
         );
-        let v = e.view_yaml();
-        assert!(v.contains("cmd: Update") && !v.contains("Remove"), "{v}");
     }
 
     /// `agr:stream-ops` — подряд идущие смены на один тип одним телом — одна
@@ -941,7 +906,6 @@ mod tests {
             "{}",
             e.yaml()
         );
-        assert!(e.view_yaml().contains("from: 5"), "вид видит смену типа");
     }
 
     /// `agr:stream-ops` — вернуть исходный тип — снять смену.
@@ -999,18 +963,15 @@ mod tests {
         assert_eq!(Edits::from_session(&old.edits, &old.stream).fields(), 1);
     }
 
+    /// `agr:view-input-seq` — вид получает правки полей и смену типа, без
+    /// удалений и вставок; одни удаления — читать файл как есть.
     #[test]
-    fn store_writes_a_new_file_per_version() {
-        let mut s = Store::new();
+    fn view_patch_skips_stream_ops() {
         let mut e = Edits::default();
-        assert_eq!(s.write(&e).unwrap(), None);
-        e.set(5, "Order", "price", "100", "1");
-        let a = s.write(&e).unwrap().unwrap();
-        let b = s.write(&e).unwrap().unwrap();
-        assert_ne!(a, b);
-        assert_eq!(std::fs::read_to_string(&b).unwrap(), e.yaml());
-        let dir = a.parent().unwrap().to_path_buf();
-        drop(s);
-        assert!(!dir.exists());
+        removed(&mut e, &[8], true);
+        assert_eq!(e.patch(), None);
+        assert!(e.commit_patch().is_some());
+        e.retype(5, "Order", "Cancel", Body::new()).unwrap();
+        assert_eq!(e.patch().unwrap().stream, None);
     }
 }

@@ -4,7 +4,7 @@
 //! Назад — окно seq перед якорем, растущее вчетверо, пока не наберётся N
 //! (seq бывают с дырами). По номеру строки — от ближайшей точки индекса. Найденное
 //! фильтром — по списку seq, с переоткрытием на больших пропусках. Что
-//! открывать — шаблоны [`Src`]: путь части и, если есть правки, yaml tll-patch.
+//! открывать — шаблоны [`Src`]: путь части и, если есть, правки поверх.
 //!
 //! Склейка (`agr:glue-parts`): файл — это упорядоченные части с восходящими
 //! непересекающимися диапазонами seq; окно, не набравшее N, продолжается с
@@ -190,7 +190,9 @@ pub fn by_seqs(ctx: &Context, src: &[Src], seqs: &[i64]) -> Result<Vec<Msg>, Str
         let in_held = held.as_ref().is_some_and(|m| m.seq >= want);
         let reopen = match (&r, Src::part_of(src, want)) {
             (None, _) => true,
-            (Some((i, _)), Some(j)) => !in_held && (*i != j || want.saturating_sub(pos) > REOPEN_GAP),
+            (Some((i, _)), Some(j)) => {
+                !in_held && (*i != j || want.saturating_sub(pos) > REOPEN_GAP)
+            }
             (Some(_), None) => return Ok(out),
         };
         if reopen {

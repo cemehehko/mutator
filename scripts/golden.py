@@ -4,6 +4,16 @@
 
     scripts/golden.py            # пересоздать tests/data/*.dat и *.json
     scripts/golden.py FILE OUT   # эталон для любого файла (первые и редкие сообщения)
+    scripts/golden.py --patch    # только эталоны правок tests/data/patch.json, stream.json
+
+`patch.json` — правки `PATCH` поверх `plain.dat`, прогнанные настоящим tll-patch
+(`patch+file://`, модуль `TLL_PATCH`, по умолчанию `tll-patch`): у каждого
+сообщения — правки и тело после них. Им сверяется свой кодировщик правок.
+
+`stream.json` — состав потока `STREAM` (удаление со сдвигом и дырой, смена типа,
+вставки в живой seq и в дыру, правки полей после сдвига) поверх `plain.dat` и
+`sparse.dat`, прогнанный тем же tll-patch: операции и весь поток после них
+(тела — у первых 40 сообщений).
 
 JSON: [{seq, msgid, name, data}], где data — дерево as_dict(), а скаляры —
 строки в том виде, в каком их печатает tll-read (enum — имя, Decimal и время — str).
@@ -18,9 +28,11 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 from tll.channel import Context
 from tll.chrono import Duration, TimePoint
+from tll.processor import Loop
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA = ROOT / 'tests' / 'data'
@@ -170,7 +182,205 @@ def dump(path, out, limit=None):
     return len(rows)
 
 
+# Правки поверх plain.dat: (seq, тип, путь, значение) — все виды скаляров,
+# offset-строка, вариант union и поле, которого не было по pmap (seq 3, opt.b).
+PATCH = [
+    (0, 'Order', 'header.order_id', '777'),
+    (0, 'Order', 'header.status', 'Wait'),
+    (0, 'Order', 'header.ts', '2026-01-02T03:04:05.123456'),
+    (0, 'Order', 'symbol', 'NEWSYM'),
+    (0, 'Order', 'side', 'Sell'),
+    (0, 'Order', 'price', '12.5'),
+    (0, 'Order', 'amt', '1.2E+3'),
+    (0, 'Order', 'ratio', '0.75'),
+    (0, 'Order', 'ttl', '1500ms'),
+    (0, 'Order', 'u8', '7'),
+    (0, 'Order', 'u64', '18446744073709551615'),
+    (0, 'Order', 'i16', '-32768'),
+    (0, 'Order', 'raw', 'wxyz'),
+    (0, 'Order', 'comment', 'новый комментарий'),
+    (0, 'Order', 'u.text', 'вариант'),
+    (1, 'Order', 'u.num', '-5'),
+    (1, 'Order', 'comment', ''),
+    (3, 'Cancel', 'opt.b', '-9'),
+    (3, 'Cancel', 'header.status', 'OK'),
+]
+
+
+def patch():
+    """Эталон правок: plain.dat через tll-patch с командами `Field` из PATCH."""
+    by_seq = {}
+    for seq, name, path, value in PATCH:
+        by_seq.setdefault((seq, name), []).append((path, value))
+    yaml = ''
+    for (seq, name), fields in by_seq.items():
+        yaml += f"- cmd: Field\n  seq: {seq}\n  name: '{name}'\n  fields:\n"
+        yaml += ''.join(f"    {p}: '{v}'\n" for p, v in fields)
+    tmp = DATA / 'patch.edits.yaml'
+    tmp.write_text(yaml)
+    try:
+        ctx = Context()
+        ctx.load(os.environ.get('TLL_PATCH', 'tll-patch'))
+        c = ctx.Channel(f'patch+file://{DATA / "plain.dat"}', name='r', dump='no', autoclose='yes', patch=str(tmp))
+        rows = []
+        seqs = {seq for seq, _ in by_seq}
+
+        def cb(ch, m):
+            if m.type != m.Type.Data or m.seq not in seqs:
+                return
+            msg = ch.scheme.unpack(m)
+            edits = {p: v for (s, n), f in by_seq.items() if s == m.seq for p, v in f}
+            rows.append({'seq': m.seq, 'msgid': m.msgid, 'name': msg.SCHEME.name, 'edits': edits,
+                         'data': jsonable(msg.as_dict())})
+
+        c.callback_add(cb)
+        # Префикс сам дочерний file-канал не крутит — опрос через Loop, как у
+        # run.py tll-patch; до первого Closed, с пределом по времени.
+        loop = Loop(config={'poll': 'no'})
+        loop.add(c)
+        c.open()
+        deadline = time.time() + 30
+        while c.state not in (c.State.Closed, c.State.Error) and time.time() < deadline:
+            loop.step(0.01)
+        assert c.state == c.State.Closed, f'tll-patch: {c.state}'
+        assert len(rows) == len(seqs), f'tll-patch отдал {len(rows)} из {len(seqs)}'
+    finally:
+        tmp.unlink()
+    (DATA / 'patch.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1) + '\n')
+    return len(rows)
+
+
+# Тело с нуля: все виды полей, списки всех offset-ptr, массив, union. Многобитное
+# поле битов python-tll показывает bool — `lvl` здесь 1 (`ioc|16`).
+FULL = {
+    'header.ts': '2026-01-02T03:04:05', 'header.status': 'Wait', 'header.order_id': '9',
+    'symbol': 'XX', 'side': 'Sell', 'flags': 'ioc|16', 'price': '1.5', 'amt': '2.5',
+    'ratio': '0.25', 'ttl': '10ms', 'u8': '1', 'u64': '18446744073709551615', 'raw': 'ab',
+    'arr[0]': '5', 'arr[1]': '6', 'comment': 'новое',
+    'legs[0].symbol': 'A', 'legs[0].qty': '1', 'legs[1].symbol': 'B', 'legs[1].qty': '2',
+    'short[0].symbol': 'S', 'short[0].qty': '3', 'long[0].symbol': 'LL', 'long[0].qty': '4',
+    'tags[0]': 'x', 'tags[1]': 'yy', 'u.text': 'ins',
+}
+
+# Состав потока: файл → операции. `from` — тип сообщения в файле.
+STREAM = {
+    'plain': [
+        {'op': 'remove', 'seq': 2, 'from': 'Cancel'},
+        {'op': 'clear', 'seq': 4, 'from': 'Ping'},
+        {'op': 'retype', 'seq': 5, 'from': 'Order', 'name': 'Ping', 'body': {'n': '55'}},
+        {'op': 'field', 'seq': 5, 'name': 'Ping', 'fields': {'n': '56'}},
+        {'op': 'retype', 'seq': 7, 'from': 'Cancel', 'name': 'Order', 'body': FULL},
+        {'op': 'insert', 'seq': 9, 'name': 'Cancel', 'occupied': True,
+         'body': {'header.order_id': '1', 'opt.a': '7', 'opt.b': '8'}},
+        {'op': 'insert', 'seq': 9, 'name': 'Ping', 'occupied': True, 'body': {'n': '1'}},
+        {'op': 'field', 'seq': 10, 'name': 'Order', 'fields': {'price': '3.25', 'comment': 'c'}},
+        {'op': 'insert', 'seq': 12, 'name': 'Order', 'occupied': True, 'body': FULL},
+        {'op': 'remove', 'seq': 13, 'from': 'Cancel'},
+        {'op': 'remove', 'seq': 14, 'from': 'Ping'},
+        {'op': 'field', 'seq': 20, 'name': 'Order', 'fields': {'header.status': 'Fail'}},
+    ],
+    'sparse': [
+        {'op': 'insert', 'seq': 20, 'name': 'Ping', 'occupied': False, 'body': {'n': '20'}},
+        {'op': 'insert', 'seq': 25, 'name': 'Ping', 'occupied': True, 'body': {'n': '25'}},
+        {'op': 'clear', 'seq': 35, 'from': 'Cancel'},
+        {'op': 'remove', 'seq': 45, 'from': 'Ping'},
+        {'op': 'field', 'seq': 55, 'name': 'Order', 'fields': {'price': '7'}},
+    ],
+}
+
+
+def nest(body):
+    """Плоские пути (`legs[0].qty`) → вложенные словари и списки по номерам."""
+    root = {}
+    for path, value in body.items():
+        node, steps = root, []
+        for part in path.split('.'):
+            name, _, rest = part.partition('[')
+            steps.append(name)
+            steps += [int(i) for i in rest.rstrip(']').split('][') if i] if rest else []
+        for k, nxt in zip(steps, steps[1:] + [None]):
+            fresh = [] if isinstance(nxt, int) else {}
+            if isinstance(k, int):
+                while len(node) <= k:
+                    node.append(None)
+                if nxt is None:
+                    node[k] = value
+                else:
+                    node[k] = node[k] if node[k] is not None else fresh
+                    node = node[k]
+            else:
+                if nxt is None:
+                    node[k] = value
+                else:
+                    node = node.setdefault(k, fresh)
+    return root
+
+
+def stream():
+    """Эталон состава потока: каждый файл STREAM через tll-patch целиком."""
+    out = []
+    for name, ops in STREAM.items():
+        cmds = []
+        for o in ops:
+            seq = o['seq']
+            if o['op'] in ('remove', 'clear'):
+                cmds.append({'cmd': o['op'].capitalize(), 'seq': seq})
+            elif o['op'] == 'field':
+                cmds.append({'cmd': 'Field', 'seq': seq, 'name': o['name'], 'fields': o['fields']})
+            elif o['op'] == 'retype':
+                body = dict(o['body'])
+                for f in ops:
+                    if f['op'] == 'field' and f['seq'] == seq:
+                        body.update(f['fields'])
+                cmds.append({'cmd': 'Update', 'seq': seq, 'name': o['name'], 'fields': nest(body)})
+            else:
+                cmds.append({'cmd': 'Insert', 'seq': seq, 'name': o['name'], 'fields': nest(o['body'])})
+        retyped = {o['seq'] for o in ops if o['op'] == 'retype'}
+        cmds = [c for c in cmds if not (c['cmd'] == 'Field' and c['seq'] in retyped)]
+        tmp = DATA / f'{name}.stream.yaml'
+        # JSON — тоже yaml: вложенные тела без своего эмиттера.
+        tmp.write_text(''.join(f'- {json.dumps(c, ensure_ascii=False)}\n' for c in cmds))
+        try:
+            rows = read_patched(DATA / f'{name}.dat', tmp)
+        finally:
+            tmp.unlink()
+        # Тела — у начала потока, где правки; дальше хватает seq и типа.
+        for r in rows[40:]:
+            del r['data']
+        out.append({'file': f'{name}.dat', 'ops': ops, 'out': rows})
+    (DATA / 'stream.json').write_text(json.dumps(out, ensure_ascii=False, indent=1) + '\n')
+    return sum(len(x['out']) for x in out)
+
+
+def read_patched(path, yaml):
+    """Весь поток файла через tll-patch: seq, тип и тело каждого сообщения."""
+    ctx = Context()
+    ctx.load(os.environ.get('TLL_PATCH', 'tll-patch'))
+    c = ctx.Channel(f'patch+file://{path}', name='r', dump='no', autoclose='yes', patch=str(yaml))
+    rows = []
+
+    def cb(ch, m):
+        if m.type != m.Type.Data:
+            return
+        msg = ch.scheme.unpack(m)
+        rows.append({'seq': m.seq, 'msgid': m.msgid, 'name': msg.SCHEME.name, 'data': jsonable(msg.as_dict())})
+
+    c.callback_add(cb)
+    loop = Loop(config={'poll': 'no'})
+    loop.add(c)
+    c.open()
+    deadline = time.time() + 30
+    while c.state not in (c.State.Closed, c.State.Error) and time.time() < deadline:
+        loop.step(0.01)
+    assert c.state == c.State.Closed, f'tll-patch: {c.state}'
+    return rows
+
+
 def main():
+    if sys.argv[1:] == ['--patch']:
+        print('patch', patch())
+        print('stream', stream())
+        return
     if len(sys.argv) == 3:
         print(dump(sys.argv[1], sys.argv[2], limit=2000))
         return
@@ -183,6 +393,8 @@ def main():
         tll_read = os.environ.get('TLL_READ', str(ROOT.parent / 'tll-lua' / 'tll-read'))
         out = subprocess.run([sys.executable, tll_read, str(dat)], check=True, capture_output=True).stdout
         (DATA / f'{name}.yaml').write_bytes(out)
+    print('patch', patch())
+    print('stream', stream())
 
 
 if __name__ == '__main__':

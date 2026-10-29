@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use super::{log, quiet, Context, Reader, Transformer, Writer};
+use crate::io::link::DriverLink;
 use crate::io::{
     Driver, DriverContext, DriverReader, DriverTransformer, DriverWriter, Info, Msg, Open,
 };
@@ -51,15 +52,19 @@ impl Driver for Tll {
     fn take_error(&self) -> Option<String> {
         log::take()
     }
+
+    fn link(&self, url: &str) -> bool {
+        super::link::is_link(url)
+    }
+
+    fn link_open(&self, url: &str) -> String {
+        super::link::default_open(url).into()
+    }
 }
 
 impl DriverContext for Context {
     fn ensure_lua(&self) -> bool {
         Context::ensure_lua(self)
-    }
-
-    fn ensure_patch(&self) -> bool {
-        Context::ensure_patch(self)
     }
 
     fn reader(&self, o: &Open) -> Result<Box<dyn DriverReader>, String> {
@@ -88,6 +93,10 @@ impl DriverContext for Context {
             Transformer::new(self, code, scheme_url)?
         };
         Ok(Box::new(t))
+    }
+
+    fn link(&self, url: &str, open: &str) -> Result<Box<dyn DriverLink>, String> {
+        Ok(Box::new(super::link::Link::open(self, url, open)?))
     }
 }
 

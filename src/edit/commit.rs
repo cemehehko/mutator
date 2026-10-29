@@ -1,6 +1,6 @@
 //! Фиксация правок: весь исходник проходит через transform (если задан) и
-//! tll-patch — `patch+[lua+]file://`, ручная правка поверх мутации скрипта — и
-//! пишется в новый файл. Исходник не теряется никогда
+//! правки со составом потока ([`Patch`] с [`Span`], `agr:stream-ops`) — ручная
+//! правка поверх мутации скрипта — и пишется в новый файл. Исходник не теряется никогда
 //! (`agr:commit-keeps-original`): либо результат ложится под новым именем, либо
 //! исходник переименовывается в бэкап, а результат занимает его место. Имена —
 //! только свободные. Пишется во временный файл в том же каталоге; до
@@ -12,9 +12,9 @@
 //! seq не больше предыдущего libtll не пишет — запись встаёт с местом ошибки,
 //! а итог ([`Committed`]) несёт настоящий последний seq.
 //!
-//! Склейка (`agr:glue-commit`): [`Plan::Part`] — каждая часть отдельно, одним и
-//! тем же полным yaml (команды с seq не этой части в её канале не срабатывают),
-//! со сдвигом seq от правок ранних частей; имена результатов — по факту записи
+//! Склейка (`agr:glue-commit`): [`Plan::Part`] — каждая часть отдельно, одними
+//! и теми же правками (правки с seq не этой части в её потоке не срабатывают,
+//! вставки — только из отрезка части), со сдвигом seq от правок ранних частей; имена результатов — по факту записи
 //! (`prefix.{M}.dat` пересчитанным ключом, тег рядом у новых файлов); опустевшая
 //! часть файла-результата не оставляет — пустой нумерованный файл ломает rotate+.
 //!
@@ -24,6 +24,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::{Patch, Span};
 use crate::io::{Context, Info, LuaMode, Open, Reader, Writer};
 
 /// Куда ляжет результат.
@@ -39,10 +40,7 @@ pub enum Target {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Plan {
     /// Одиночный файл: цель задана именем — как сегодня.
-    Single {
-        src: PathBuf,
-        target: Target,
-    },
+    Single { src: PathBuf, target: Target },
     /// Часть склейки: имя результата — по факту записи. Ротационная часть
     /// (`prefix.{seq}.dat`) получает пересчитанное имя `prefix.{M}.dat` тем же
     /// ключом, что у исходника; новым файлом — тег рядом (`prefix.{M}.patched.dat`,
@@ -57,6 +55,9 @@ pub enum Plan {
         overwrite: bool,
         tag: String,
         shift: i64,
+        /// Чьи вставки пишет часть: перед seq от её начала до начала
+        /// следующей части (у первой и последней — без границы).
+        span: Span,
     },
 }
 
@@ -124,13 +125,12 @@ pub fn check(src: &Path, target: &Target) -> Result<(), String> {
     }
 }
 
-/// Записать планы по очереди (`agr:glue-commit`): каждая часть отдельно, один
-/// и тот же полный yaml — команды с seq не этой части в её канале не
-/// срабатывают. Прогресс — доля по всем частям. Ошибка останавливает: записанное
+/// Записать планы по очереди (`agr:glue-commit`): каждая часть отдельно, одни
+/// и те же правки — правки с seq не этой части в её потоке не срабатывают. Прогресс — доля по всем частям. Ошибка останавливает: записанное
 /// до неё — законченные файлы (или бэкапы с результатом), исходники целы.
 pub fn run_all(
     plans: &[Plan],
-    yaml: Option<&Path>,
+    patch: Option<&Patch>,
     stop: &AtomicBool,
     lua: Option<(&str, Option<LuaMode>)>,
     mut progress: impl FnMut(f32),
@@ -138,7 +138,7 @@ pub fn run_all(
     let n = plans.len().max(1);
     let mut out = Vec::with_capacity(plans.len());
     for (i, p) in plans.iter().enumerate() {
-        out.push(run_plan(p, yaml, stop, lua, |f| {
+        out.push(run_plan(p, patch, stop, lua, |f| {
             progress((i as f32 + f) / n as f32)
         })?);
     }
@@ -148,22 +148,22 @@ pub fn run_all(
 /// Записать один план: `progress` — доля этой части.
 pub fn run_plan(
     plan: &Plan,
-    yaml: Option<&Path>,
+    patch: Option<&Patch>,
     stop: &AtomicBool,
     lua: Option<(&str, Option<LuaMode>)>,
     progress: impl FnMut(f32),
 ) -> Result<Committed, String> {
     match plan {
-        Plan::Single { src, target } => run_single(src, yaml, target, stop, lua, progress),
-        Plan::Part { .. } => run_part(plan, yaml, stop, lua, progress),
+        Plan::Single { src, target } => run_single(src, patch, target, stop, lua, progress),
+        Plan::Part { .. } => run_part(plan, patch, stop, lua, progress),
     }
 }
 
-/// Записать исходник `src` через правки `yaml` в цель. `progress` — доля
+/// Записать исходник `src` через правки `patch` в цель. `progress` — доля
 /// пройденного по seq. Ответ — путь результата.
 fn run_single(
     src: &Path,
-    yaml: Option<&Path>,
+    patch: Option<&Patch>,
     target: &Target,
     stop: &AtomicBool,
     lua: Option<(&str, Option<LuaMode>)>,
@@ -179,8 +179,8 @@ fn run_single(
         ".{}.tui-patch.tmp",
         out.file_name().unwrap_or_default().to_string_lossy()
     ));
-    let r = write(src, yaml, &tmp, stop, lua, 0, &mut progress).and_then(
-        |(first, last, written)| {
+    let r =
+        write(src, patch, &tmp, stop, lua, 0, &mut progress).and_then(|(first, last, written)| {
             check(src, target)?;
             match target {
                 Target::NewFile(p) => finalize(None, &tmp, p).map(|()| (first, last, written)),
@@ -188,8 +188,7 @@ fn run_single(
                     finalize(Some((src, backup)), &tmp, src).map(|()| (first, last, written))
                 }
             }
-        },
-    );
+        });
     if r.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -204,7 +203,7 @@ fn run_single(
 /// Записать часть склейки: имя результата — по факту записи (`agr:glue-commit`).
 fn run_part(
     plan: &Plan,
-    yaml: Option<&Path>,
+    patch: Option<&Patch>,
     stop: &AtomicBool,
     lua: Option<(&str, Option<LuaMode>)>,
     mut progress: impl FnMut(f32),
@@ -215,6 +214,7 @@ fn run_part(
         overwrite,
         tag,
         shift,
+        span,
     } = plan
     else {
         unreachable!("run_part — только Plan::Part")
@@ -230,7 +230,11 @@ fn run_part(
         ".{}.tui-patch.tmp",
         src.file_name().unwrap_or_default().to_string_lossy()
     ));
-    let r = write(src, yaml, &tmp, stop, lua, *shift, &mut progress);
+    let patch = patch.map(|p| Patch {
+        edits: p.edits.clone(),
+        stream: p.stream.map(|_| *span),
+    });
+    let r = write(src, patch.as_ref(), &tmp, stop, lua, *shift, &mut progress);
     let (first, last, written) = match r {
         Ok(x) => x,
         Err(e) => {
@@ -305,7 +309,10 @@ fn finalize_part(
     let out = renamed.unwrap_or_else(|| src.to_path_buf());
     let backup = free_name(src, "orig");
     if out != src && out.exists() {
-        return Err(format!("{} уже есть — имя результата занято", out.display()));
+        return Err(format!(
+            "{} уже есть — имя результата занято",
+            out.display()
+        ));
     }
     finalize(Some((src, &backup)), tmp, &out).map(|()| out)
 }
@@ -330,7 +337,7 @@ fn rotation_renamed(src: &Path, info: &Info, first: i64, last: i64) -> Option<Pa
 
 fn write(
     src: &Path,
-    yaml: Option<&Path>,
+    patch: Option<&Patch>,
     tmp: &Path,
     stop: &AtomicBool,
     lua: Option<(&str, Option<LuaMode>)>,
@@ -342,10 +349,7 @@ fn write(
     let info = plain.info();
     let scheme = plain.scheme_url().ok_or("у файла нет схемы")?;
     drop(plain);
-    let mut open = Open::file(src);
-    if let Some(p) = yaml {
-        open = open.patch(Some(p.to_path_buf()));
-    }
+    let mut open = Open::file(src).backend(info.backend).patch(patch.cloned());
     if let Some((code, mode)) = lua {
         open.lua = Some(code.to_string());
         open.lua_mode = mode;

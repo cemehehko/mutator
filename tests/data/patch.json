@@ -1,0 +1,143 @@
+[
+ {
+  "seq": 0,
+  "msgid": 10,
+  "name": "Order",
+  "edits": {
+   "header.order_id": "777",
+   "header.status": "Wait",
+   "header.ts": "2026-01-02T03:04:05.123456",
+   "symbol": "NEWSYM",
+   "side": "Sell",
+   "price": "12.5",
+   "amt": "1.2E+3",
+   "ratio": "0.75",
+   "ttl": "1500ms",
+   "u8": "7",
+   "u64": "18446744073709551615",
+   "i16": "-32768",
+   "raw": "wxyz",
+   "comment": "новый комментарий",
+   "u.text": "вариант"
+  },
+  "data": {
+   "header": {
+    "ts": "2026-01-02T03:04:05.123456Z",
+    "status": "Wait",
+    "order_id": "777"
+   },
+   "symbol": "NEWSYM",
+   "side": "Sell",
+   "flags": {
+    "ioc": "0",
+    "fok": "1",
+    "lvl": "0"
+   },
+   "price": "12.50000000",
+   "amt": "1.2E+3",
+   "ratio": "0.75",
+   "ttl": "1500ms",
+   "u8": "7",
+   "u16": "65535",
+   "u32": "4000000000",
+   "u64": "18446744073709551615",
+   "i16": "-32768",
+   "raw": "wxyz",
+   "arr": [],
+   "comment": "новый комментарий",
+   "legs": [],
+   "short": [
+    {
+     "symbol": "S",
+     "qty": "0"
+    }
+   ],
+   "long": [],
+   "tags": [],
+   "u": {
+    "text": "вариант"
+   }
+  }
+ },
+ {
+  "seq": 1,
+  "msgid": 10,
+  "name": "Order",
+  "edits": {
+   "u.num": "-5",
+   "comment": ""
+  },
+  "data": {
+   "header": {
+    "ts": "2026-09-22T13:41:27.001Z",
+    "status": "Fail",
+    "order_id": "1000"
+   },
+   "symbol": "GAZP",
+   "side": "Sell",
+   "flags": {
+    "ioc": "1",
+    "fok": "0",
+    "lvl": "1"
+   },
+   "price": "101.01000000",
+   "amt": "3000000.00",
+   "ratio": "1.0",
+   "ttl": "10ms",
+   "u8": "254",
+   "u16": "65534",
+   "u32": "4000000001",
+   "u64": "9223372036854775809",
+   "i16": "-1",
+   "raw": "420001ff",
+   "arr": [
+    "0"
+   ],
+   "comment": "",
+   "legs": [
+    {
+     "symbol": "L0",
+     "qty": "0"
+    }
+   ],
+   "short": [
+    {
+     "symbol": "S",
+     "qty": "1"
+    }
+   ],
+   "long": [
+    {
+     "symbol": "LL",
+     "qty": "-1"
+    }
+   ],
+   "tags": [
+    "t0"
+   ],
+   "u": {
+    "num": "-5"
+   }
+  }
+ },
+ {
+  "seq": 3,
+  "msgid": 20,
+  "name": "Cancel",
+  "edits": {
+   "opt.b": "-9",
+   "header.status": "OK"
+  },
+  "data": {
+   "header": {
+    "ts": "2026-09-22T13:41:27.003002Z",
+    "status": "OK",
+    "order_id": "1001"
+   },
+   "opt": {
+    "a": "3",
+    "b": "-9"
+   }
+  }
+ }
+]

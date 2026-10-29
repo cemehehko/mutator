@@ -16,9 +16,9 @@
 //! выбора типов/колонок — [`Prompt`] здесь же, чтобы оба вида вели себя одинаково.
 //! Открытая справка F1 ([`Help`]) глотает клавиши, пока её не закрыли.
 //!
-//! Правка поля: `Enter`/`e` в детали — новое значение, воркер прогоняет его
-//! через tll-patch на этом сообщении (`agr:edit-checked`); принятое ложится в
-//! [`Edits`], и вид перечитывается через новый yaml (`agr:patch-overlay`).
+//! Правка поля: `Enter`/`e` в детали — новое значение, воркер записывает его
+//! по схеме в это сообщение (`agr:edit-checked`); принятое ложится в
+//! [`Edits`], и вид перечитывается с новыми правками (`agr:patch-overlay`).
 //! `u` снимает правку поля, `w` — диалог фиксации [`Commit`]; записанный файл
 //! открывается вместо прежнего ([`Desk::reopen`]).
 //!
@@ -42,7 +42,8 @@ use crate::columns::{self, Preset};
 use crate::data::{At, Cmd, Edge, Ev, File, Index, Matches, Mutations, Place, View, Worker};
 use crate::decode::{self, Node};
 use crate::edit::commit::{self, Target};
-use crate::edit::{Body, Edits, Forecast, Insert, SeqMap, Store, Summary};
+use crate::edit::{Body, Edits, Forecast, Insert, Patch, SeqMap, Summary};
+use crate::io::link::{Link, LinkState, Status as LinkStatus};
 use crate::io::{Context, LuaMode, Msg, Reader};
 use crate::lua::Filter;
 use crate::range::Border;
@@ -148,6 +149,8 @@ pub enum PromptKind {
     MassEdit {
         kind: EditKind,
     },
+    /// Параметры открытия линка (`mode=…`): Enter — открыть заново.
+    LinkOpen,
 }
 
 /// Тип правки поля.
@@ -241,6 +244,9 @@ impl Prompt {
             PromptKind::MassEdit { .. } => "массовая правка поля",
             PromptKind::Delete => "удалить",
             PromptKind::Retype { .. } => "сменить тип",
+            PromptKind::LinkOpen => {
+                "открыть линк: mode=online | initial | seq;seq=N | block;block=N"
+            }
         }
     }
 
@@ -345,20 +351,14 @@ impl Commit {
     }
 }
 
-/// Правка, ждущая ответа tll-patch.
+/// Правка, ждущая проверки записью.
 struct Pending {
     id: u64,
     edits: Edits,
-    patch: PathBuf,
+    patch: Patch,
     /// Строка ввода — вернуть, если правку не примут.
     prompt: Prompt,
-    /// Проверяется вставка.
-    insert: Option<InsertCheck>,
 }
-
-/// Проверяемая вставка: seq, номер и тело (msgid, байты), с которым сверить
-/// копию.
-type InsertCheck = (i64, usize, Option<(i32, Vec<u8>)>);
 
 /// Что удалить или чей тип сменить, когда выберут как.
 #[derive(Debug, Clone)]
@@ -487,7 +487,6 @@ pub struct Desk {
     /// Что мутатор изменил в видимом окне: seq → путь → значение в файле, до
     /// него (`agr:transform-shadow`). Тела строк в виде — прогоные.
     pub mutations: Mutations,
-    store: Store,
     check_id: u64,
     pending: Option<Pending>,
     pub commit: Option<Commit>,
@@ -524,6 +523,13 @@ pub struct Desk {
     /// правку, и устаревшая правка отбрасывается, а не ложится в чужой файл
     /// (`agr:agent-gen`).
     file_gen: Arc<std::sync::atomic::AtomicU64>,
+    /// Линк переподключается или открывается с новыми параметрами: вид
+    /// переедет на него, когда спул будет готов (`agr:link-open`).
+    link_next: Option<Link>,
+    /// Состояние линка, которое вид уже показал: смена — перерисовать.
+    link_seen: Option<LinkStatus>,
+    /// Последний seq спула, о котором воркер уже спрошен ([`Cmd::Tail`]).
+    tail_sent: Option<i64>,
 }
 
 impl Desk {
@@ -565,6 +571,7 @@ impl Desk {
         let sel_row = self.first_row.map(|f| f + self.sel);
         let sel_seq = self.rows.get(self.sel).map(|r| r.seq);
         crate::agent::Snap {
+            file: self.file.clone(),
             total: self.index.as_ref().map(|idx| idx.total),
             index: self.index.clone(),
             filter: self.filter.clone(),
@@ -642,7 +649,6 @@ impl Desk {
             history_search: Vec::new(),
             edits: Edits::default(),
             mutations: Mutations::default(),
-            store: Store::new(),
             check_id: 0,
             pending: None,
             commit: None,
@@ -662,6 +668,9 @@ impl Desk {
             act_tx,
             synced_edits: Edits::default(),
             file_gen,
+            link_next: None,
+            link_seen: None,
+            tail_sent: None,
         };
         d.jump(At::Seq(i64::MIN), None);
         d
@@ -669,7 +678,7 @@ impl Desk {
 
     /// Применить действия агента: он просит, меняет — тот же `Desk`, что и
     /// человек (`agr:agent-same-desk`). Фильтр, поиск, переход, колонки — сразу;
-    /// правки — как свои: yaml на диск, файл перечитывается через `patch+`.
+    /// правки — как свои: файл перечитывается с ними.
     fn act(&mut self, a: crate::agent::Act) {
         match a {
             crate::agent::Act::Filter(f) => self.set_filter(f),
@@ -703,6 +712,9 @@ impl Desk {
                 }
             }
             crate::agent::Act::Sync { edits, gen } => {
+                if self.deny_edit() {
+                    return;
+                }
                 if gen != self.file_gen.load(std::sync::atomic::Ordering::SeqCst) {
                     // Человек переоткрыл файл, пока агент думал: правка по
                     // устаревшей картине — не применяем (`agr:agent-gen`).
@@ -714,17 +726,10 @@ impl Desk {
         }
     }
 
-    /// Правки агента в вид: yaml на диск, окно перечитывается через `patch+`
-    /// (`agr:patch-overlay`). Незафиксированные правки агента и человека —
-    /// одни и те же.
+    /// Правки агента в вид: окно перечитывается с ними (`agr:patch-overlay`).
+    /// Незафиксированные правки агента и человека — одни и те же.
     fn sync_edits(&mut self, e: Edits) {
-        let patch = match self.store.write(&e) {
-            Ok(p) => p,
-            Err(x) => {
-                self.status = format!("правки агента: {x}");
-                return;
-            }
-        };
+        let patch = e.patch();
         self.status = format!("правок агента: {} — w зафиксировать", e.count());
         self.apply(e, patch);
     }
@@ -812,6 +817,7 @@ impl Desk {
             self.act(a);
             changed = true;
         }
+        changed |= self.link_poll();
         let evs = self.worker.poll();
         if !evs.is_empty() {
             changed = true;
@@ -879,12 +885,32 @@ impl Desk {
             }
             Ev::TransformError(e) => self.status = format!("transform: {e}"),
             Ev::IndexProgress(p) => self.index_progress = p,
+            Ev::Tail { info, index } => {
+                // Спул подрос: границы и индекс — новые, окно и курсор — где
+                // были; у нижнего края окно дочитает хвост само (`agr:link-tail`).
+                self.file.info = info;
+                if index.is_some() {
+                    self.index = index;
+                }
+                if self.rows.is_empty() {
+                    if !self.pending_replace && self.matches.is_none() {
+                        self.jump(At::Seq(i64::MIN), None);
+                    }
+                } else {
+                    self.at_end = false;
+                }
+            }
             Ev::Index(i) => {
+                let behind = self.file.link.is_some() && i.last < self.file.info.seq_last;
                 self.index = Some(i);
                 self.index_progress = 1.0;
+                if behind {
+                    // Индекс строился, пока спул рос: дописать хвост.
+                    self.worker.send(Cmd::Tail);
+                }
                 // Номера строк станут известны: перечитать окно с того же места.
                 if self.matches.is_none() {
-                    if self.at_end {
+                    if self.at_end && self.file.link.is_none() {
                         // Окно у нижнего края файла (`End`, в т.ч. сразу после
                         // перечитывания хвоста): перечитка от `rows[top]` увела
                         // бы его в середину — держимся настоящего конца.
@@ -906,6 +932,14 @@ impl Desk {
             }
             Ev::Filter { .. } => {}
             Ev::FilterTick { id } if id == self.filter_id => {
+                if self.file.link.is_some() {
+                    // Фильтр линка досканирует хвост спула; найденное в нём —
+                    // за нижним краем окна (`agr:link-tail`).
+                    self.worker.send(Cmd::Tail);
+                    if !self.rows.is_empty() && self.matches.as_ref().is_some_and(|m| m.is_done()) {
+                        self.at_end = false;
+                    }
+                }
                 if let Some(m) = self.matches.clone() {
                     if let Some(e) = m.error.lock().unwrap().as_ref() {
                         self.status = format!("фильтр: {e}");
@@ -946,45 +980,12 @@ impl Desk {
                     return;
                 }
                 let p = self.pending.take().unwrap();
-                match (result, p.insert) {
-                    (Ok(m), Some((seq, k, src))) => {
-                        // Вставка: тело от tll-patch — в строку вида; копия
-                        // должна совпасть с исходником (`agr:edit-checked`).
-                        if let Some((msgid, data)) = src {
-                            let differ = (msgid == m.msgid)
-                                .then(|| {
-                                    self.file.scheme.message(msgid).map(|st| {
-                                        decode::diff(&self.file.scheme, st, &data, &m.data)
-                                    })
-                                })
-                                .flatten();
-                            if let Some(d) = differ.filter(|d| !d.is_empty()) {
-                                self.status = format!(
-                                    "копия неточна (байты вне ASCII tll-patch не пишет), вставка не принята: {}",
-                                    d.into_iter()
-                                        .take(5)
-                                        .map(|(p, _)| p)
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                );
-                                return;
-                            }
-                        }
-                        let mut e = p.edits;
-                        e.set_insert_data(seq, k, m.data);
-                        match self.store.write(&e) {
-                            Ok(patch) => {
-                                self.status = format!("правок: {} — w зафиксировать", e.count());
-                                self.apply(e, patch);
-                            }
-                            Err(x) => self.status = x,
-                        }
-                    }
-                    (Ok(_), None) => {
+                match result {
+                    Ok(_) => {
                         self.status = format!("правок: {} — w зафиксировать", p.edits.count());
                         self.apply(p.edits, Some(p.patch));
                     }
-                    (Err(e), _) => {
+                    Err(e) => {
                         self.status = format!("правка не принята: {}", one_line(&e));
                         if !matches!(p.prompt.kind, PromptKind::Columns) {
                             self.prompt = Some(p.prompt);
@@ -1468,21 +1469,16 @@ impl Desk {
         if s.focus_detail && s.detail_open {
             self.focus = Focus::Detail;
         }
-        if !s.edits.is_empty() || !s.stream.is_empty() {
+        if (!s.edits.is_empty() || !s.stream.is_empty()) && !self.read_only() {
             // Первое окно уже запрошено без правок — перечитать с ними.
             let e = Edits::from_session(&s.edits, &s.stream);
-            match self.store.write(&e) {
-                Ok(p) => {
-                    self.status =
-                        format!("правки из сессии: {} — w зафиксировать, u снять", e.count());
-                    self.seq_map = e.seq_map();
-                    self.edits = e;
-                    self.file.patch = p.clone();
-                    self.worker.send(Cmd::Patch(p));
-                    self.jump(At::Seq(i64::MIN), None);
-                }
-                Err(x) => self.status = format!("правки из сессии: {x}"),
-            }
+            let p = e.patch();
+            self.status = format!("правки из сессии: {} — w зафиксировать, u снять", e.count());
+            self.seq_map = e.seq_map();
+            self.edits = e;
+            self.file.patch = p.clone();
+            self.worker.send(Cmd::Patch(p));
+            self.jump(At::Seq(i64::MIN), None);
         }
         // Transform-код из сессии: применить до фильтра — воркер снимает копию
         // файла при `Cmd::Filter`, и первый скан обязан видеть прогоные тела
@@ -1603,8 +1599,8 @@ impl Desk {
     }
 
     /// Применить transform-код Lua (режим Normal tll-lua): перечитать файл
-    /// через `patch+[lua+]file://` без preset=filter, зовущий `tll_on_data` —
-    /// тела в виде прогоные, ручная правка поверх мутации скрипта.
+    /// через `lua+file://` без preset=filter, зовущий `tll_on_data`, с правками
+    /// поверх — тела в виде прогоные, ручная правка поверх мутации скрипта.
     pub fn set_transform(&mut self, code: String) {
         self.lua_code = code.clone();
         self.lua_mode = LuaMode::Transform;
@@ -1825,6 +1821,13 @@ impl Desk {
     /// перечитывания: `Some(i64::MAX)` — на новую последнюю строку, `None` —
     /// остаться на прежнем seq (`agr:reload`).
     fn reload_to(&mut self, land: Option<i64>) {
+        if self.file.link.is_some() {
+            // Спул линка растёт сам: перечитывать нечего, `End` — просто в конец.
+            if land.is_some() {
+                self.jump(At::End, land);
+            }
+            return;
+        }
         let saved = self.file.name.clone();
         let old_last = self.file.last();
         let Ok(file) = File::open_spec(&saved) else {
@@ -2004,7 +2007,12 @@ impl Desk {
             Key::Char('g') => self.prompt = Some(Prompt::line(PromptKind::Goto, String::new())),
             Key::Char('t') => self.open_types(),
             Key::Char('c') => self.open_columns(),
+            Key::Char('r') if self.file.link.is_some() => self.relink(),
             Key::Char('r') => self.reload(),
+            Key::Char('o') if self.file.link.is_some() => {
+                let open = self.link_status().map(|s| s.open).unwrap_or_default();
+                self.prompt = Some(Prompt::line(PromptKind::LinkOpen, open));
+            }
             Key::Char('x') => self.show_hex = !self.show_hex,
             Key::Char('i') => self.show_types = !self.show_types,
             // E — включить/выключить transform-код, не стирая его (правка — F4).
@@ -2372,6 +2380,7 @@ impl Desk {
                 self.search(Filter::expr(text), back);
             }
             PromptKind::Goto => self.goto(&text),
+            PromptKind::LinkOpen => self.reopen_link(&text),
             PromptKind::Edit { seq, ins, .. } => self.propose(seq, ins, &p.path, &text, p.clone()),
             PromptKind::MassEdit { kind } => {
                 // Сохранить состояние массовой правки — дальше диалог подтверждения.
@@ -2488,6 +2497,9 @@ impl Desk {
 
     /// Начать правку поля под курсором детали.
     pub fn edit_field(&mut self) {
+        if self.deny_edit() {
+            return;
+        }
         if self.commit.is_some() || self.pending.is_some() {
             return;
         }
@@ -2539,6 +2551,9 @@ impl Desk {
     /// Начать массовую правку поля под курсором детали — тот же prompt, что и
     /// для одиночной, но с пометкой `MassEdit`.
     pub fn edit_field_mass(&mut self) {
+        if self.deny_edit() {
+            return;
+        }
         if self.commit.is_some() || self.pending.is_some() {
             return;
         }
@@ -2656,7 +2671,7 @@ impl Desk {
         Some(field.kind.clone())
     }
 
-    /// Новое значение поля: проверить прогоном tll-patch, потом наложить.
+    /// Новое значение поля: проверить записью по схеме, потом наложить.
     fn propose(&mut self, seq: i64, ins: Option<usize>, path: &str, text: &str, prompt: Prompt) {
         if let Some(k) = ins {
             // Поле вставки: тело вставки меняется, проверка — её командой.
@@ -2704,14 +2719,7 @@ impl Desk {
             self.status.clear();
             return;
         }
-        let patch = match self.store.write(&e) {
-            Ok(p) => p,
-            Err(x) => {
-                self.status = x;
-                return;
-            }
-        };
-        let Some(patch) = patch else {
+        let Some(patch) = e.patch() else {
             // Правок не осталось — проверять нечего.
             self.status = "правок нет".into();
             self.apply(e, None);
@@ -2723,7 +2731,6 @@ impl Desk {
             edits: e,
             patch: patch.clone(),
             prompt,
-            insert: None,
         });
         self.status = "проверяю правку…".into();
         self.worker.send(Cmd::Check {
@@ -2735,6 +2742,9 @@ impl Desk {
 
     /// Снять правку поля под курсором детали.
     fn unset_field(&mut self) {
+        if self.deny_edit() {
+            return;
+        }
         if self.commit.is_some() || self.pending.is_some() {
             return;
         }
@@ -2750,17 +2760,13 @@ impl Desk {
             self.status = format!("{path} не правлено");
             return;
         }
-        match self.store.write(&e) {
-            Ok(p) => {
-                self.status = format!("правка {path} снята");
-                self.apply(e, p);
-            }
-            Err(x) => self.status = x,
-        }
+        self.status = format!("правка {path} снята");
+        let p = e.patch();
+        self.apply(e, p);
     }
 
-    /// Наложить правки: вид, фильтр и деталь перечитываются через новый yaml.
-    fn apply(&mut self, e: Edits, patch: Option<PathBuf>) {
+    /// Наложить правки: вид, фильтр и деталь перечитываются с новыми.
+    fn apply(&mut self, e: Edits, patch: Option<Patch>) {
         self.seq_map = e.seq_map();
         self.edits = e;
         self.file.patch = patch.clone();
@@ -2788,6 +2794,9 @@ impl Desk {
     /// `d`/`Del`: что удалить — выбранную строку или диапазон от метки `v` —
     /// и выбор, как (`agr:stream-ops`). Вставку удаляет сразу.
     pub fn open_delete(&mut self) {
+        if self.deny_edit() {
+            return;
+        }
         if self.commit.is_some() || self.pending.is_some() {
             return;
         }
@@ -2902,13 +2911,8 @@ impl Desk {
             self.status = format!("менять нечего: все уже {name} или удалены");
             return;
         };
-        let patch = match self.store.write(&e) {
-            Ok(Some(p)) => p,
-            Ok(None) => return,
-            Err(x) => {
-                self.status = x;
-                return;
-            }
+        let Some(patch) = e.patch() else {
+            return;
         };
         self.check_id += 1;
         self.pending = Some(Pending {
@@ -2916,7 +2920,6 @@ impl Desk {
             edits: e,
             patch: patch.clone(),
             prompt: Prompt::line(PromptKind::Columns, String::new()),
-            insert: None,
         });
         self.status = format!("тип {name} у {n} сообщ.: проверяю…");
         self.worker.send(Cmd::Check {
@@ -2948,12 +2951,10 @@ impl Desk {
         self.write_and_apply(e);
     }
 
-    /// Правки без проверки (удаление, снятие): yaml вида и перечитать.
+    /// Правки без проверки (удаление, снятие): перечитать с ними.
     fn write_and_apply(&mut self, e: Edits) {
-        match self.store.write(&e) {
-            Ok(p) => self.apply(e, p),
-            Err(x) => self.status = x,
-        }
+        let p = e.patch();
+        self.apply(e, p);
     }
 
     /// `u` в таблице: вернуть удалённое, снять смену типа, убрать вставку.
@@ -2978,9 +2979,12 @@ impl Desk {
     }
 
     /// `o`/`Ins`: вставить перед выбранной строкой её копию; дальше её поля и
-    /// тип правятся в детали. Копия проверяется tll-patch и сверяется с
+    /// тип правятся в детали. Копия собирается по схеме и сверяется с
     /// исходником (`agr:stream-ops`).
     pub fn insert_copy(&mut self) {
+        if self.deny_edit() {
+            return;
+        }
         if self.commit.is_some() || self.pending.is_some() {
             return;
         }
@@ -3016,8 +3020,8 @@ impl Desk {
         self.check_insert(e, seq, k, &ins, Some((r.msgid, r.data.clone())), prompt);
     }
 
-    /// Проверить вставку её командой; `src` — тело, с которым должна совпасть
-    /// копия.
+    /// Собрать тело вставки по схеме и принять её; `src` — тело, с которым
+    /// должна совпасть копия.
     fn check_insert(
         &mut self,
         e: Edits,
@@ -3027,32 +3031,47 @@ impl Desk {
         src: Option<(i32, Vec<u8>)>,
         prompt: Prompt,
     ) {
-        let patch = match self.store.write_text(&Edits::insert_yaml(seq, ins)) {
-            Ok(Some(p)) => p,
-            Ok(None) => return,
+        let data = match crate::edit::encode::compose(&self.file.scheme, &ins.name, &ins.body) {
+            Ok((_, data)) => data,
             Err(x) => {
-                self.status = x;
+                self.status = format!("вставка не принята: {}", one_line(&x));
+                if !matches!(prompt.kind, PromptKind::Columns) {
+                    self.prompt = Some(prompt);
+                }
                 return;
             }
         };
-        self.check_id += 1;
-        self.pending = Some(Pending {
-            id: self.check_id,
-            edits: e,
-            patch: patch.clone(),
-            prompt,
-            insert: Some((seq, k, src)),
-        });
-        self.status = "проверяю вставку…".into();
-        self.worker.send(Cmd::Check {
-            id: self.check_id,
-            patch,
-            seq,
-        });
+        // Копия должна совпасть с исходником (`agr:edit-checked`).
+        if let Some((msgid, src)) = src {
+            let differ = self
+                .file
+                .scheme
+                .message(msgid)
+                .map(|st| decode::diff(&self.file.scheme, st, &src, &data));
+            if let Some(d) = differ.filter(|d| !d.is_empty()) {
+                self.status = format!(
+                    "копия неточна, вставка не принята: {}",
+                    d.into_iter()
+                        .take(5)
+                        .map(|(p, _)| p)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                return;
+            }
+        }
+        let mut e = e;
+        e.set_insert_data(seq, k, data);
+        self.status = format!("правок: {} — w зафиксировать", e.count());
+        let patch = e.patch();
+        self.apply(e, patch);
     }
 
     /// `T`: выбрать новый тип выбранного сообщения.
     pub fn open_retype(&mut self) {
+        if self.deny_edit() {
+            return;
+        }
         if self.commit.is_some() || self.pending.is_some() {
             return;
         }
@@ -3153,17 +3172,10 @@ impl Desk {
             self.status = x;
             return;
         }
-        let patch = match self.store.write(&e) {
-            Ok(Some(p)) => p,
-            Ok(None) => {
-                self.status = format!("seq {seq}: тип возвращён");
-                self.apply(e, None);
-                return;
-            }
-            Err(x) => {
-                self.status = x;
-                return;
-            }
+        let Some(patch) = e.patch() else {
+            self.status = format!("seq {seq}: тип возвращён");
+            self.apply(e, None);
+            return;
         };
         self.check_id += 1;
         self.pending = Some(Pending {
@@ -3171,7 +3183,6 @@ impl Desk {
             edits: e,
             patch: patch.clone(),
             prompt: Prompt::line(PromptKind::Columns, String::new()),
-            insert: None,
         });
         self.status = format!("проверяю тип {name}…");
         self.worker.send(Cmd::Check {
@@ -3183,6 +3194,9 @@ impl Desk {
 
     /// Открыть диалог фиксации.
     pub fn open_commit(&mut self) {
+        if self.deny_edit() {
+            return;
+        }
         let transform = self.transform_on();
         if self.edits.is_empty() && !transform {
             self.status = "правок нет — фиксировать нечего".into();
@@ -3242,23 +3256,14 @@ impl Desk {
         if c.running.is_some() {
             return;
         }
-        // Фиксация читает с начала файла — полный yaml с перенумерацией
+        // Фиксация читает с начала файла — все правки с перенумерацией
         // (`agr:view-input-seq`).
-        let patch = match self.store.write_full(&self.edits) {
-            Ok(Some(p)) => Some(p),
-            Ok(None) => {
-                if !send_code {
-                    // Нет ни правок полей, ни transform-кода — писать нечего.
-                    c.error = Some("нечего фиксировать".into());
-                    return;
-                }
-                None
-            }
-            Err(e) => {
-                c.error = Some(e);
-                return;
-            }
-        };
+        let patch = self.edits.commit_patch();
+        if patch.is_none() && !send_code {
+            // Нет ни правок, ни transform-кода — писать нечего.
+            c.error = Some("нечего фиксировать".into());
+            return;
+        }
         // Склейка (`agr:glue-commit`): каждой части — свой план; пишутся части с
         // правками, с transform и те, что сдвинуты правками ранних частей.
         let plans = if self.file.parts.len() > 1 {
@@ -3270,9 +3275,17 @@ impl Desk {
             let map = self.edits.seq_map();
             let overwrite = c.mode == CommitMode::Overwrite;
             let mut plans = Vec::new();
-            for p in &self.file.parts {
+            let parts = &self.file.parts;
+            for (i, p) in parts.iter().enumerate() {
                 let shift = map.before(p.begin());
-                if !send_code && !self.edits.touches(p.begin(), p.last()) && shift == 0 {
+                // Вставки части — перед seq от её начала до начала следующей:
+                // в дыре между частями — у ранней (`agr:glue-commit`).
+                let span = crate::edit::Span {
+                    from: (i > 0).then(|| p.begin()),
+                    till: parts.get(i + 1).map(|n| n.begin()),
+                };
+                let last = span.till.map_or(i64::MAX, |t| t - 1);
+                if !send_code && !self.edits.touches(p.begin(), last) && shift == 0 {
                     continue;
                 }
                 if overwrite && commit::growing(&p.path) {
@@ -3288,6 +3301,7 @@ impl Desk {
                     overwrite,
                     tag: tag.clone(),
                     shift,
+                    span,
                 });
             }
             if plans.is_empty() {
@@ -3426,19 +3440,12 @@ impl Desk {
             self.status = "правок нет".into();
             return;
         }
-        let patch = match self.store.write(&e) {
-            Ok(p) => p,
-            Err(x) => {
-                self.status = x;
-                return;
-            }
-        };
-        let Some(patch) = patch else {
+        let Some(patch) = e.patch() else {
             self.status = "правок нет".into();
             self.apply(e, None);
             return;
         };
-        // Проверяем выбранное сообщение через tll-patch.
+        // Проверяем записью выбранное сообщение.
         let seq = self
             .detail
             .as_ref()
@@ -3451,7 +3458,6 @@ impl Desk {
             edits: e,
             patch: patch.clone(),
             prompt: Prompt::line(PromptKind::Columns, String::new()),
-            insert: None,
         });
         self.status = "проверяю правку…".into();
         self.worker.send(Cmd::Check {
@@ -3475,6 +3481,13 @@ impl Desk {
             s.lua_transform_enabled = Some(false);
         }
         let status = std::mem::take(&mut self.status);
+        self.replace(file, &s);
+        self.status = status;
+        Ok(())
+    }
+
+    /// Открыть `file` вместо этого с видом `s`.
+    fn replace(&mut self, file: File, s: &Session) {
         let height = self.height;
         let detail_height = self.detail_height;
         // Приёмник действий агента переезжает в новый `Desk`: агент остаётся
@@ -3491,8 +3504,112 @@ impl Desk {
         );
         self.height = height;
         self.detail_height = detail_height;
-        self.restore(&s);
-        self.status = status;
-        Ok(())
+        self.restore(s);
+    }
+}
+
+/// Линк: спул вместо файла, только просмотр, состояние всегда видно.
+impl Desk {
+    /// Открыт линк — только просмотр (`agr:link-read-only`).
+    pub fn read_only(&self) -> bool {
+        self.file.link.is_some()
+    }
+
+    /// Правка у линка — отказ с причиной в строке состояния.
+    fn deny_edit(&mut self) -> bool {
+        if self.read_only() {
+            self.status = "линк — только просмотр: правки и фиксация недоступны".into();
+        }
+        self.read_only()
+    }
+
+    /// Состояние линка для строки состояния (`agr:link-state`); идёт
+    /// переподключение — его состояние.
+    pub fn link_status(&self) -> Option<LinkStatus> {
+        self.link_next
+            .as_ref()
+            .or(self.file.link.as_deref())
+            .map(|l| l.status())
+    }
+
+    /// `r` у линка: переподключить его в тот же спул, дописывая за последним
+    /// сообщением (`agr:link-open`).
+    pub fn relink(&mut self) {
+        let Some(l) = &self.file.link else { return };
+        match l.resume(self.notify.clone()) {
+            Ok(n) => {
+                self.link_next = Some(n);
+                self.status = "линк: переподключаю…".into();
+            }
+            Err(e) => self.status = format!("линк: {e}"),
+        }
+    }
+
+    /// Открыть линк заново с параметрами `open` — в новый спул; вид
+    /// (фильтр, колонки) переедет, когда спул будет готов (`agr:link-open`).
+    pub fn reopen_link(&mut self, open: &str) {
+        let Some(l) = &self.file.link else { return };
+        match l.reopen(open.trim(), self.notify.clone()) {
+            Ok(n) => {
+                self.link_next = Some(n);
+                self.status = format!("линк: открываю с {}…", open.trim());
+            }
+            Err(e) => self.status = format!("линк: {e}"),
+        }
+    }
+
+    /// Состояние линка: готовое переподключение, рост спула. `true` — вид
+    /// поменялся.
+    fn link_poll(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(n) = &self.link_next {
+            let s = n.status();
+            if s.spool.is_some() {
+                let n = self.link_next.take().unwrap();
+                if self.file.parts.last().is_some_and(|p| p.path == n.spool()) {
+                    // Переподключение: тот же спул, хвост дописывается дальше.
+                    self.file.link = Some(Arc::new(n));
+                    self.status = "линк переподключён".into();
+                } else {
+                    self.switch_link(n);
+                }
+                changed = true;
+            } else if matches!(s.state, LinkState::Error | LinkState::Closed) {
+                self.status = format!("линк не открылся: {}", s.line());
+                self.link_next = None;
+                changed = true;
+            }
+        }
+        let Some(l) = &self.file.link else {
+            return changed;
+        };
+        let s = l.status();
+        if s.last > self.file.info.seq_last && self.tail_sent != s.last {
+            // Спул подрос: воркер дочитает границы, индекс и фильтр.
+            self.tail_sent = s.last;
+            self.worker.send(Cmd::Tail);
+        }
+        if self.link_seen.as_ref() != Some(&s) {
+            self.link_seen = Some(s);
+            changed = true;
+        }
+        changed
+    }
+
+    /// Вид — на спул линка, открытого заново: фильтр, колонки, деталь — те же,
+    /// место — с начала нового потока.
+    fn switch_link(&mut self, n: Link) {
+        let file = match File::open_link(n) {
+            Ok(f) => f,
+            Err(e) => {
+                self.status = format!("линк: {e}");
+                return;
+            }
+        };
+        let mut s = self.session();
+        s.seq = None;
+        s.edits.clear();
+        self.replace(file, &s);
+        self.status = "линк открыт заново".into();
     }
 }

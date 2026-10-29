@@ -10,8 +10,8 @@ use egui;
 
 use super::{Act, State};
 use crate::agent::Settings;
-use crate::desk::Key;
 use crate::agent::{Cmd, CmdTx};
+use crate::desk::Key;
 use crate::ui::theme::{ACCENT, DIM, ERROR, OK, PANEL, TEXT};
 use crate::ui::tui::grid::Grid;
 
@@ -107,7 +107,10 @@ pub(super) fn box_tui(g: &mut Grid<Act>, state: &State, cols: usize, rows: usize
         Some(Ok(s)) => {
             extra.push((format!("подключено: {s}"), OK));
             if state.tools_ok == Some(false) {
-                extra.push(("⚠ tools не поддержаны: агент не вызовет инструменты".into(), ERROR));
+                extra.push((
+                    "⚠ tools не поддержаны: агент не вызовет инструменты".into(),
+                    ERROR,
+                ));
             }
         }
         Some(Err(e)) => extra.push((e.clone(), ERROR)),
@@ -154,7 +157,12 @@ pub(super) fn box_tui(g: &mut Grid<Act>, state: &State, cols: usize, rows: usize
         if row + 2 > y + h {
             break;
         }
-        g.put(row, x + 1, &crate::ui::cols::fit(l, w.saturating_sub(2), false), *c);
+        g.put(
+            row,
+            x + 1,
+            &crate::ui::cols::fit(l, w.saturating_sub(2), false),
+            *c,
+        );
     }
     g.put(
         y + h - 1,

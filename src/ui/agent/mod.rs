@@ -390,7 +390,10 @@ pub fn frame(state: &mut State, cols: usize, rows: usize) -> Grid<Act> {
             ACCENT,
         )
     } else if state.settings_draft.is_some() {
-        ("настройки: Tab — поле · Enter — сохранить · Esc — отмена".to_string(), DIM)
+        (
+            "настройки: Tab — поле · Enter — сохранить · Esc — отмена".to_string(),
+            DIM,
+        )
     } else {
         ("Enter — отправить · Ctrl+N — диалог".to_string(), DIM)
     };
@@ -653,13 +656,21 @@ mod tests {
         let mut s = State::new();
         s.apply(Ev::Started { dialog: "d".into() });
         let g = frame(&mut s, 80, 12);
-        assert!(g.text(11).starts_with("••• модель думает"), "{}", g.text(11));
+        assert!(
+            g.text(11).starts_with("••• модель думает"),
+            "{}",
+            g.text(11)
+        );
         s.apply(Ev::Delta {
             dialog: "d".into(),
             text: "привет".into(),
         });
         let g = frame(&mut s, 80, 12);
-        assert!(g.text(11).contains("модель пишет · 6 знаков"), "{}", g.text(11));
+        assert!(
+            g.text(11).contains("модель пишет · 6 знаков"),
+            "{}",
+            g.text(11)
+        );
         let tape = chat::tape(&s);
         assert_eq!(tape.last().unwrap().last().unwrap().0, "▍", "курсор потока");
     }
@@ -680,7 +691,8 @@ mod tests {
         s.apply(Ev::Started { dialog: "d".into() });
         let g = frame(&mut s, 100, 12);
         assert!(
-            g.text(11).contains("модель думает · schema_fields → 3 строк"),
+            g.text(11)
+                .contains("модель думает · schema_fields → 3 строк"),
             "{}",
             g.text(11)
         );
@@ -772,7 +784,10 @@ mod tests {
         s.settings.api_key = "sk_secretsecretsecret1234".into();
         apply(&mut s, &cmd, Act::Settings);
         let g = frame(&mut s, 100, 24);
-        let all: String = (0..g.rows()).map(|r| g.text(r)).collect::<Vec<_>>().join("\n");
+        let all: String = (0..g.rows())
+            .map(|r| g.text(r))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(all.contains("1234"));
         assert!(!all.contains("secretsecret"));
         assert!(all.contains("▸ адрес"));
