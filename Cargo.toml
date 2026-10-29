@@ -1,6 +1,6 @@
 [package]
 name = "tll-mutator"
-version = "0.0.16"
+version = "0.0.21"
 edition = "2021"
 description = "Просмотр датников TLL: таблица сообщений, фильтр, поиск — в окне и в терминале"
 

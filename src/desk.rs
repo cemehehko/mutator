@@ -152,8 +152,6 @@ pub enum PromptKind {
     MassEdit {
         kind: EditKind,
     },
-    /// Параметры открытия линка (`mode=…`): Enter — открыть заново.
-    LinkOpen,
 }
 
 /// Тип правки поля.
@@ -247,9 +245,6 @@ impl Prompt {
             PromptKind::MassEdit { .. } => "массовая правка поля",
             PromptKind::Delete => "удалить",
             PromptKind::Retype { .. } => "сменить тип",
-            PromptKind::LinkOpen => {
-                "открыть линк: mode=online | initial | seq;seq=N | block;block=N"
-            }
         }
     }
 
@@ -405,6 +400,9 @@ pub struct Desk {
 
     pub index: Option<Arc<Index>>,
     pub index_progress: f32,
+    /// Индекс пришёл, когда окна ещё не было: окно в полёте могло читаться
+    /// без него — без номеров строк, и его надо перечитать.
+    renumber: bool,
 
     /// Применённый фильтр и его результат.
     pub filter: Filter,
@@ -503,6 +501,11 @@ pub struct Desk {
     pub scan_pending: bool,
     /// Записанный файл: вид откроет его вместо этого ([`Desk::reopen`]).
     pub reopen: Option<PathBuf>,
+    /// Форма «Открыть линк» (`o` у линка): url и параметры (`agr:link-open`).
+    pub link_form: Option<crate::browse::OpenForm>,
+    /// Другой линк, url и параметры: его открывает хозяин вида (окно,
+    /// терминал, браузер) — вид сам файл не меняет.
+    pub open_link: Option<(String, String)>,
     /// Метка начала диапазона (`v`): seq.
     pub mark: Option<i64>,
     /// Ждёт выбора: как удалять или на какой тип сменить.
@@ -608,6 +611,7 @@ impl Desk {
             gen: 0,
             index: None,
             index_progress: 0.0,
+            renumber: false,
             filter: Filter::default(),
             filter_id: 0,
             matches: None,
@@ -668,6 +672,8 @@ impl Desk {
             scan_pending: false,
             reopen: None,
             mark: None,
+            link_form: None,
+            open_link: None,
             targets: None,
             seqs_pending: None,
             forecast_id: 0,
@@ -753,6 +759,23 @@ impl Desk {
 
     fn fetch_size(&self) -> usize {
         (self.height * 2).max(MIN_FETCH)
+    }
+
+    /// Перечитать окно с того же места, чтобы у строк появились номера
+    /// (`agr:anchor`); в виде фильтра номера и так есть.
+    fn renumber(&mut self) {
+        if self.matches.is_some() {
+            return;
+        }
+        if self.at_end && self.file.link.is_none() {
+            // Окно у нижнего края файла (`End`, в т.ч. сразу после
+            // перечитывания хвоста): перечитка от `rows[top]` увела
+            // бы его в середину — держимся настоящего конца.
+            self.jump(At::End, Some(i64::MAX));
+        } else if let Some(r) = self.rows.get(self.top) {
+            let land = self.rows.get(self.sel).map(|r| r.seq);
+            self.jump(At::Seq(r.seq), land);
+        }
     }
 
     /// Новое окно: всё в полёте забыто.
@@ -891,7 +914,11 @@ impl Desk {
                     Place::Replace => self.mutations = mutated,
                     _ => self.mutations.extend(mutated),
                 }
+                let replace = matches!(place, Place::Replace);
                 self.window(place, rows, first_row, at_start, at_end);
+                if replace && std::mem::take(&mut self.renumber) && first_row.is_none() {
+                    self.renumber();
+                }
             }
             Ev::TransformError(e) => self.status = format!("transform: {e}"),
             Ev::IndexProgress(p) => self.index_progress = p,
@@ -919,16 +946,12 @@ impl Desk {
                     self.worker.send(Cmd::Tail);
                 }
                 // Номера строк станут известны: перечитать окно с того же места.
-                if self.matches.is_none() {
-                    if self.at_end && self.file.link.is_none() {
-                        // Окно у нижнего края файла (`End`, в т.ч. сразу после
-                        // перечитывания хвоста): перечитка от `rows[top]` увела
-                        // бы его в середину — держимся настоящего конца.
-                        self.jump(At::End, Some(i64::MAX));
-                    } else if let Some(r) = self.rows.get(self.top) {
-                        let land = self.rows.get(self.sel).map(|r| r.seq);
-                        self.jump(At::Seq(r.seq), land);
-                    }
+                // Окна ещё нет — то, что в полёте, могло читаться без индекса
+                // (воркер взял его раньше, чем индекс лёг в слот).
+                if self.rows.is_empty() {
+                    self.renumber = true;
+                } else {
+                    self.renumber();
                 }
             }
             Ev::Filter { id, matches } if id == self.filter_id => {
@@ -1917,6 +1940,18 @@ impl Desk {
             self.prompt_key(k);
             return;
         }
+        if let Some(f) = self.link_form.as_mut() {
+            use crate::browse::FormAction;
+            match f.key(k) {
+                Some(FormAction::Open(url, open)) => {
+                    self.link_form = None;
+                    self.open_link_form(url, open);
+                }
+                Some(FormAction::Cancel) => self.link_form = None,
+                None => {}
+            }
+            return;
+        }
         if self.focus == Focus::Detail && self.detail_open && self.detail_key(k) {
             return;
         }
@@ -2023,8 +2058,9 @@ impl Desk {
             Key::Char('r') if self.file.link.is_some() => self.relink(),
             Key::Char('r') => self.reload(),
             Key::Char('o') if self.file.link.is_some() => {
-                let open = self.link_status().map(|s| s.open).unwrap_or_default();
-                self.prompt = Some(Prompt::line(PromptKind::LinkOpen, open));
+                if let Some(s) = self.link_status() {
+                    self.link_form = Some(crate::browse::OpenForm::new(&s.url, &s.open));
+                }
             }
             Key::Char('x') => self.show_hex = !self.show_hex,
             Key::Char('i') => self.show_types = !self.show_types,
@@ -2393,7 +2429,6 @@ impl Desk {
                 self.search(Filter::expr(text), back);
             }
             PromptKind::Goto => self.goto(&text),
-            PromptKind::LinkOpen => self.reopen_link(&text),
             PromptKind::Edit { seq, ins, .. } => self.propose(seq, ins, &p.path, &text, p.clone()),
             PromptKind::MassEdit { kind } => {
                 // Сохранить состояние массовой правки — дальше диалог подтверждения.
@@ -3567,6 +3602,18 @@ impl Desk {
         }
     }
 
+    /// Форма `o` закрыта Enter: тот же url — заново в этом виде
+    /// ([`Desk::reopen_link`]), другой — хозяину вида ([`Desk::open_link`]).
+    fn open_link_form(&mut self, url: String, open: String) {
+        let same = self.file.link.as_ref().is_some_and(|l| l.url() == url);
+        if same {
+            self.reopen_link(&open);
+        } else {
+            self.status = format!("линк: открываю {url}…");
+            self.open_link = Some((url, open));
+        }
+    }
+
     /// Открыть линк заново с параметрами `open` — в новый спул; вид
     /// (фильтр, колонки) переедет, когда спул будет готов (`agr:link-open`).
     pub fn reopen_link(&mut self, open: &str) {
@@ -3639,5 +3686,55 @@ impl Desk {
         s.edits.clear();
         self.replace(file, &s);
         self.status = "линк открыт заново".into();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::Open;
+    use std::time::{Duration, Instant};
+
+    fn settled(d: &mut Desk, done: impl Fn(&Desk) -> bool) {
+        let t = Instant::now();
+        while !(done(d) && d.idle()) {
+            d.wait(Duration::from_millis(100));
+            d.poll();
+            assert!(t.elapsed() < Duration::from_secs(30), "не дождались");
+        }
+    }
+
+    /// `agr:anchor` — индекс обогнал первое окно, а воркер читал его ещё без
+    /// индекса: окно перечитывается, и у строк появляются номера.
+    #[test]
+    fn rows_get_numbers_when_the_index_overtakes_the_first_window() {
+        crate::io::quiet();
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/plain.dat");
+        let mut d = Desk::open(File::open(&path).unwrap(), Arc::new(|| {}));
+        d.height = 10;
+        settled(&mut d, |d| d.index.is_some() && d.sel_row().is_some());
+        let index = d.index.take().unwrap();
+
+        // Как в гонке: окна нет, первое в полёте, индекс приходит раньше него.
+        d.rows.clear();
+        d.first_row = None;
+        d.pending_replace = true;
+        d.event(Ev::Index(index));
+        let ctx = Context::new();
+        let mut r = Reader::open(&ctx, &Open::file(&path)).unwrap();
+        let rows: Vec<Msg> = std::iter::from_fn(|| r.next()).take(20).collect();
+        d.event(Ev::Window {
+            gen: d.gen,
+            place: Place::Replace,
+            rows,
+            first_row: None,
+            at_start: true,
+            at_end: false,
+            mutated: Default::default(),
+            transform_error: None,
+        });
+        assert_eq!(d.sel_row(), None, "окно пришло без номеров");
+        settled(&mut d, |d| d.sel_row().is_some());
+        assert_eq!(d.sel_row(), Some(0));
     }
 }

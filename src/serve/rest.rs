@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | GET | `/healthz` | жив ли сервер |
 //! | GET | `/api/v1/info` | версия и файл по умолчанию |
+//! | GET | `/api/v1/resolve` | линки resolve-сервера: `?filter=&sort=&all=1` (`agr:resolve-browse`) |
 //! | GET | `/api/v1/ops` | операции и схемы аргументов |
 //! | POST | `/api/v1/ops/{op}` | вызов: быстрая — `200 {result}`, долгая — `202 {op_id}` |
 //! | GET | `/api/v1/runs/{op_id}` | запуск: состояние и итог |
@@ -134,6 +135,10 @@ pub struct Server {
 
 struct Inner {
     links: Links,
+    /// Список линков resolve-сервера. Пусто, пока адрес не задан `--resolve`,
+    /// окружением, `recent.toml` или Ctrl+A во вкладке; вкладка и REST держат
+    /// один и тот же [`crate::io::resolve::Browser`].
+    resolve: Arc<Mutex<Option<Arc<crate::io::resolve::Browser>>>>,
     /// Сервер останавливается: потоки SSE закрываются сами
     /// (`agr:serve-stop`).
     stop: tokio::sync::watch::Sender<bool>,
@@ -154,6 +159,7 @@ impl Server {
         Server {
             inner: Arc::new(Inner {
                 links,
+                resolve: Arc::new(Mutex::new(None)),
                 stop: tokio::sync::watch::channel(false).0,
                 events: broadcast::channel(BUFFER).0,
                 runs: Mutex::default(),
@@ -177,6 +183,51 @@ impl Server {
     /// Линки сервера — общие для всех транспортов.
     pub fn links(&self) -> &Links {
         &self.inner.links
+    }
+
+    /// Сервер со списком линков resolve-сервера `addr` (`HOST:PORT`).
+    pub fn with_resolve(links: Links, addr: Option<&str>) -> Self {
+        let s = Server::new(links);
+        if let Some(a) = addr {
+            s.connect_resolve(a);
+        }
+        s
+    }
+
+    /// Список линков resolve, если сервер задан.
+    pub fn resolve(&self) -> Option<Arc<crate::io::resolve::Browser>> {
+        self.inner
+            .resolve
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Общий слот списка: вкладка читает его же, Ctrl+A подменяет адрес.
+    pub(crate) fn resolve_slot(&self) -> Arc<Mutex<Option<Arc<crate::io::resolve::Browser>>>> {
+        self.inner.resolve.clone()
+    }
+
+    /// Подключиться к `addr`. Список уже есть — адрес меняется у него;
+    /// иначе поднимается новый, и REST начинает его отдавать.
+    pub fn connect_resolve(&self, addr: &str) -> Arc<crate::io::resolve::Browser> {
+        let existing = self.resolve();
+        if let Some(b) = existing {
+            b.retarget(addr, Arc::new(|| {}));
+            return b;
+        }
+        let b = Arc::new(crate::io::resolve::Browser::start(addr, Arc::new(|| {})));
+        *self.inner.resolve.lock().unwrap_or_else(|e| e.into_inner()) = Some(b.clone());
+        b
+    }
+
+    /// Вкладка подняла свой список (сервера на старте не было) — REST читает его.
+    pub(crate) fn adopt_resolve(&self, browser: Arc<crate::io::resolve::Browser>) {
+        let mut slot = self.inner.resolve.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|b| Arc::ptr_eq(b, &browser)) {
+            return;
+        }
+        *slot = Some(browser);
     }
 
     fn emit(&self, e: Event) {
@@ -218,6 +269,7 @@ pub fn router(server: Server) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/v1/info", get(info))
+        .route("/api/v1/resolve", get(resolve))
         .route(
             "/api/v1/ops",
             get(|State(s): State<Server>| async move { Json(ops::list(&s.inner.links)) }),
@@ -512,6 +564,38 @@ async fn info(State(s): State<Server>) -> Json<Value> {
     }))
 }
 
+#[derive(Deserialize, Default)]
+struct ResolveQuery {
+    #[serde(default)]
+    filter: String,
+    /// Колонка: `service`, `channel`, `proto`, `addr`, `host`, `tags`,
+    /// `scheme`, `params`; `-` впереди — обратный порядок.
+    #[serde(default)]
+    sort: String,
+    /// `1`/`true` — со служебными дочерними экспортами (`…/online`, `…/request`).
+    #[serde(default)]
+    all: Option<String>,
+}
+
+/// Список линков resolve с тем же отбором и порядком, что у вида
+/// (`agr:resolve-filter`). Сервера нет — 404 с подсказкой.
+async fn resolve(State(s): State<Server>, Query(q): Query<ResolveQuery>) -> Response {
+    let Some(b) = s.resolve() else {
+        return problem(
+            StatusCode::NOT_FOUND,
+            "resolve-сервер не задан: --resolve HOST:PORT или адрес в списке",
+        );
+    };
+    let all = q
+        .all
+        .as_deref()
+        .is_some_and(|a| matches!(a, "1" | "true" | "yes"));
+    match crate::browse::listing(&b, &q.filter, &q.sort, all) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => problem(StatusCode::BAD_REQUEST, e),
+    }
+}
+
 async fn run_state(State(s): State<Server>, Path(op_id): Path<String>) -> Response {
     let runs = s.inner.runs.lock().unwrap();
     match runs.iter().find(|r| r.op_id == op_id) {
@@ -627,5 +711,28 @@ async fn close_link(State(s): State<Server>, Query(q): Query<CloseLink>) -> Resp
         StatusCode::NO_CONTENT.into_response()
     } else {
         problem(StatusCode::NOT_FOUND, format!("линк {} не открыт", q.url))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::resolve::{Browser, Snapshot};
+
+    /// `agr:resolve-browse` — вкладка отдала свой список, REST читает его же.
+    #[test]
+    fn an_adopted_browser_is_the_one_rest_reads() {
+        let s = Server::new(Links::default());
+        assert!(s.resolve().is_none());
+        let b = Arc::new(Browser::fixed(Snapshot {
+            addr: "h:1".into(),
+            ..Default::default()
+        }));
+        s.adopt_resolve(b.clone());
+        let got = s.resolve().unwrap();
+        assert!(Arc::ptr_eq(&b, &got));
+        assert_eq!(got.addr(), "h:1");
+        s.adopt_resolve(b.clone());
+        assert!(Arc::ptr_eq(&b, &s.resolve().unwrap()));
     }
 }

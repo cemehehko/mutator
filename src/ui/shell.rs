@@ -3,14 +3,14 @@
 //!
 //! `Shell` стоит над [`App`](super::App): держит `Option<App>`, список
 //! последних файлов и родное меню. Окно без файла — это `Shell` без `App`:
-//! заглушка с подсказкой, а `Desk` не знает про «файла нет» (иначе нечего было
-//! бы показывать в таблице, агенту и сессии).
+//! список линков resolve ([`Browse`], `agr:resolve-browse`), а `Desk` не знает
+//! про «файла нет» (иначе нечего было бы показывать в таблице, агенту и сессии).
+//! F5 (или меню «Файл → Линки resolve…») показывает список и поверх открытого
+//! вида; Esc — назад к виду. Выбранный линк открывается, как любой другой.
 //!
-//! Файл открывают три пути, и все ведут в [`Shell::open_path`]: меню «Файл»
-//! (диалог или «Последние»), перетаскивание файла в окно (в любом состоянии —
-//! и над заглушкой, и поверх открытого файла) и диалог первого кадра, если при
-//! запуске без аргумента последнего файла не нашлось. Закрыли диалог ничего не
-//! выбрав — остаётся заглушка.
+//! Файл открывают два пути, и оба ведут в [`Shell::open_path`]: меню «Файл»
+//! (диалог или «Последние») и перетаскивание файла в окно (в любом состоянии —
+//! и над списком, и поверх открытого файла).
 //!
 //! Смена файла строит `App` заново ([`App::from_file`](super::App::from_file)):
 //! агент и его диалоги привязаны к имени файла при старте. Сессия прежнего
@@ -31,9 +31,11 @@ use egui;
 
 use super::menu::{self, Action, Menu};
 use super::{theme::*, App};
+use crate::browse::{self, Browse};
 use crate::data::File;
 use crate::desk::Desk;
 use crate::io::link::{self, Link, LinkState};
+use crate::io::resolve::Browser;
 use crate::recent::Recent;
 use crate::session;
 
@@ -42,12 +44,16 @@ pub struct Shell {
     app: Option<App>,
     recent: Recent,
     menu: Menu,
-    /// Почему не открылся файл — показывает заглушка.
+    /// Почему не открылся файл — показывает список.
     note: Option<String>,
-    /// Диалог первого кадра уже спрашивали (или файл был с самого начала).
-    asked: bool,
     /// Линк, который ещё не стал Active: заглушка показывает его состояние.
     pending: Option<Pending>,
+    /// Список линков resolve: заводится при первом показе.
+    browse: Option<Browse>,
+    /// Список поверх открытого вида (F5); без вида он и так на экране.
+    browsing: bool,
+    /// Дробные строки колеса списка.
+    wheel: f32,
 }
 
 /// Линк в ожидании спула.
@@ -64,12 +70,14 @@ impl Shell {
     /// Оболочка без родного меню; [`Shell::with_menu`] его подключает.
     pub fn new(app: Option<App>, recent: Recent) -> Shell {
         Shell {
-            asked: app.is_some(),
             app,
             recent,
             menu: Menu::none(),
             note: None,
             pending: None,
+            browse: None,
+            browsing: false,
+            wheel: 0.0,
         }
     }
 
@@ -85,13 +93,15 @@ impl Shell {
         fresh: bool,
         setup: Option<Setup>,
     ) {
-        self.asked = true;
         let repaint = ctx.clone();
         let notify = std::sync::Arc::new(move || repaint.request_repaint());
         match Link::start(url, open, None, keep.as_deref(), notify) {
             Ok(link) => {
                 self.pending = Some(Pending { link, fresh, setup });
                 self.note = None;
+                if let Some(b) = &mut self.browse {
+                    b.note = None;
+                }
             }
             Err(e) => self.say(format!("{url}: {e}")),
         }
@@ -125,6 +135,7 @@ impl Shell {
         };
         let setup = setup.unwrap_or_else(|| Box::new(|_: &mut Desk| {}));
         self.app = Some(App::from_file(ctx, file, session, setup));
+        self.browsing = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("mutator — {url}")));
         self.recent.push(Path::new(&url));
         self.save_recent();
@@ -150,6 +161,64 @@ impl Shell {
     /// Почему не открылся последний выбранный файл.
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
+    }
+
+    /// Виден ли список линков resolve.
+    pub fn browsing(&self) -> bool {
+        self.pending.is_none() && (self.browsing || self.app.is_none())
+    }
+
+    /// Список линков, если его уже заводили.
+    pub fn browse(&self) -> Option<&Browse> {
+        self.browse.as_ref()
+    }
+
+    /// Показать список линков (F5, меню); Esc вернёт к открытому виду.
+    pub fn show_browse(&mut self, ctx: &egui::Context) {
+        self.browsing = true;
+        let back = self.app.is_some();
+        self.ensure_browse(ctx).back = back;
+    }
+
+    /// Список на сервере из `--resolve`, окружения или `recent.toml`.
+    fn ensure_browse(&mut self, ctx: &egui::Context) -> &mut Browse {
+        let recent = &self.recent;
+        self.browse.get_or_insert_with(|| {
+            let repaint = ctx.clone();
+            let notify: std::sync::Arc<dyn Fn() + Send + Sync> =
+                std::sync::Arc::new(move || repaint.request_repaint());
+            let browser = recent
+                .resolve_addr()
+                .map(|a| std::sync::Arc::new(Browser::start(&a, notify.clone())));
+            Browse::new(browser, notify)
+        })
+    }
+
+    /// Кадр списка и что в нём выбрали.
+    fn browse_view(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let back = self.app.is_some();
+        let note = self.note.clone();
+        let mut wheel = self.wheel;
+        let b = self.ensure_browse(&ctx);
+        b.back = back;
+        if note.is_some() && b.note.is_none() {
+            b.note = note;
+        }
+        let action = super::browse::show(ui, b, &mut wheel);
+        self.wheel = wheel;
+        match action {
+            Some(browse::Action::Open(url, open)) => {
+                self.note = None;
+                self.open_link(&ctx, &url, &open, None, false, None);
+            }
+            Some(browse::Action::Back) => self.browsing = false,
+            Some(browse::Action::Connect(a)) => {
+                self.recent.resolve = Some(a);
+                self.save_recent();
+            }
+            Some(browse::Action::Quit) | None => {}
+        }
     }
 
     /// Открыть файл вместо текущего (или вместо заглушки). `true` — открыли.
@@ -185,6 +254,7 @@ impl Shell {
         let session = session::load(path);
         self.app = Some(App::from_file(ctx, file, session, |_| {}));
         self.note = None;
+        self.browsing = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
             "mutator — {}",
             path.display()
@@ -195,8 +265,15 @@ impl Shell {
         true
     }
 
-    /// Сообщение: заглушке — в подсказку, окну с файлом — в строку состояния.
+    /// Сообщение: список на экране — в его строку, заглушке — в подсказку,
+    /// окну с файлом — в строку состояния. Пока виден список, строки вида нет.
     fn say(&mut self, text: String) {
+        if self.browsing {
+            if let Some(b) = &mut self.browse {
+                b.note = Some(text);
+                return;
+            }
+        }
         match &mut self.app {
             Some(app) => app.desk.status = text,
             None => self.note = Some(text),
@@ -214,6 +291,7 @@ impl Shell {
         for a in self.menu.poll() {
             match a {
                 Action::Open => self.ask_file(ctx),
+                Action::Browse => self.show_browse(ctx),
                 Action::Recent(p) => {
                     self.open_path(ctx, &p);
                 }
@@ -266,7 +344,8 @@ impl Shell {
         );
     }
 
-    /// Заглушка линка, который ещё не стал Active: его состояние и ошибка.
+    /// Заглушка линка, который ещё не стал Active: его состояние и ошибка;
+    /// Esc — бросить его и вернуться.
     fn waiting(&self, ui: &mut egui::Ui, p: &Pending) {
         let s = p.link.status();
         let fg = match s.state {
@@ -293,37 +372,8 @@ impl Shell {
                     ui.add_space(12.0);
                     ui.colored_label(ERROR, e);
                 }
-            });
-        });
-    }
-
-    /// Заглушка: окно без файла.
-    fn placeholder(&self, ui: &mut egui::Ui) {
-        if let Some(p) = &self.pending {
-            return self.waiting(ui, p);
-        }
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(ui.available_height() / 3.0);
-                ui.label(
-                    egui::RichText::new("Перетащите файл датника в окно")
-                        .size(22.0)
-                        .color(TEXT),
-                );
-                ui.label(
-                    egui::RichText::new("или выберите Файл → Открыть… (⌘O)")
-                        .size(16.0)
-                        .color(DIM),
-                );
-                if let Some(n) = &self.note {
-                    ui.add_space(16.0);
-                    ui.colored_label(ERROR, n);
-                }
-                let known = self.recent.existing();
-                if !known.is_empty() {
-                    ui.add_space(16.0);
-                    ui.label(egui::RichText::new("Последние файлы — в меню Файл").color(DIM));
-                }
+                ui.add_space(16.0);
+                ui.label(egui::RichText::new("Esc — бросить").color(DIM));
             });
         });
     }
@@ -333,9 +383,30 @@ impl Shell {
         let ctx = ui.ctx().clone();
         self.take_dropped(&ctx);
         self.take_ready(&ctx);
-        match &mut self.app {
-            Some(app) => app.draw(ui),
-            None => self.placeholder(ui),
+        // Esc бросает ждущий линк и на этом кадр кончается: та же клавиша не
+        // доходит до списка (там это «назад к файлу») и до детали в `Desk`.
+        if self.pending.is_some() {
+            let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+            if esc {
+                self.pending = None;
+                ctx.request_repaint();
+            } else if let Some(p) = &self.pending {
+                self.waiting(ui, p);
+            }
+            self.drop_hint(&ctx);
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F5)) && !self.browsing() {
+            self.show_browse(&ctx);
+        }
+        if self.browsing() {
+            self.browse_view(ui);
+        } else if let Some(app) = &mut self.app {
+            app.draw(ui);
+            // Форма `o` вида назвала другой линк: открыть его, как из списка.
+            if let Some((url, open)) = app.desk.open_link.take() {
+                self.open_link(&ctx, &url, &open, None, false, None);
+            }
         }
         self.drop_hint(&ctx);
     }
@@ -350,12 +421,11 @@ impl eframe::App for Shell {
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.menu_actions(ctx);
-        // Запуск без файла и без последнего: диалог первого кадра.
-        if !self.asked {
-            self.asked = true;
-            self.ask_file(ctx);
-        }
-        if let Some(app) = &mut self.app {
+        if let Some(app) = self
+            .app
+            .as_mut()
+            .filter(|_| self.pending.is_none() && !self.browsing)
+        {
             app.logic(ctx, frame);
         }
     }
@@ -365,6 +435,9 @@ impl eframe::App for Shell {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if self.pending.is_some() {
+            return;
+        }
         if let Some(app) = &mut self.app {
             app.raw_input_hook(ctx, raw);
         }

@@ -277,11 +277,19 @@ fn open_params_reach_the_channel_and_reopen_switches_spool() {
     let first = d.file.parts[0].path.clone();
 
     d.key(Key::Char('o'));
-    let p = d.prompt.as_mut().expect("строка параметров");
-    assert_eq!(p.text, "seq=300");
-    p.text = "seq=350".into();
-    p.cursor = p.text.chars().count();
+    let f = d.link_form.as_ref().expect("форма «Открыть линк»");
+    assert_eq!(
+        (f.url.text.as_str(), f.open.text.as_str()),
+        (url(&src).as_str(), "seq=300")
+    );
+    for _ in 0..3 {
+        d.key(Key::Backspace);
+    }
+    for c in "350".chars() {
+        d.key(Key::Char(c));
+    }
     d.key(Key::Enter);
+    assert!(d.open_link.is_none(), "тот же url — переоткрывает сам вид");
     until(&mut d, "новый спул", |d| {
         d.file.parts[0].path != first && total(d) == 50
     });
@@ -292,5 +300,40 @@ fn open_params_reach_the_channel_and_reopen_switches_spool() {
         assert!(t.elapsed() < Duration::from_secs(10), "прежний спул удалён");
         std::thread::sleep(Duration::from_millis(20));
     }
+    let _ = std::fs::remove_dir_all(src.parent().unwrap());
+}
+
+/// `agr:link-open` — форма `o` с другим url: вид сам файл не меняет, а
+/// отдаёт url и параметры хозяину (окну, терминалу, браузеру).
+#[test]
+fn form_with_other_url_goes_to_the_host() {
+    if !lua() {
+        return;
+    }
+    let src = source("other");
+    let mut d = desk(start(&url(&src), "", None));
+    until(&mut d, "весь файл", |d| total(d) == 400);
+    d.key(Key::Char('o'));
+    let g = tui_patch::ui::tui::frame(&mut d, 100, 30);
+    let screen: String = (0..g.rows()).map(|r| g.text(r) + "\n").collect();
+    assert!(
+        screen.contains("Открыть линк"),
+        "форма видна в сетке F2:\n{screen}"
+    );
+    d.key(Key::Tab);
+    d.key(Key::Ctrl('u'));
+    for c in "resolve://svc/ch".chars() {
+        d.key(Key::Char(c));
+    }
+    d.key(Key::Tab);
+    for c in "mode=initial".chars() {
+        d.key(Key::Char(c));
+    }
+    d.key(Key::Enter);
+    assert!(d.link_form.is_none());
+    assert_eq!(
+        d.open_link,
+        Some(("resolve://svc/ch".into(), "mode=initial".into()))
+    );
     let _ = std::fs::remove_dir_all(src.parent().unwrap());
 }

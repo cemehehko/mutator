@@ -20,6 +20,8 @@ pub(super) fn map(k: &KeyEvent) -> Option<Key> {
         KeyCode::F(2) => Key::Char('\u{F2}'),
         KeyCode::F(3) => Key::Char('\u{F3}'),
         KeyCode::F(4) => Key::Char('\u{F4}'),
+        // F5 — список линков resolve.
+        KeyCode::F(5) => Key::Char('\u{F5}'),
         KeyCode::Char(c) if k.modifiers.contains(KeyModifiers::CONTROL) => Key::Ctrl(c),
         KeyCode::Char(c) => Key::Char(c),
         KeyCode::Enter => Key::Enter,
@@ -86,7 +88,8 @@ mod tests {
         for (c, k) in pairs {
             assert_eq!(map(&ev(c, n)), Some(k));
         }
-        assert_eq!(map(&ev(KeyCode::F(5), n)), None);
+        assert_eq!(map(&ev(KeyCode::F(5), n)), Some(Key::Char('\u{F5}')));
+        assert_eq!(map(&ev(KeyCode::F(6), n)), None);
         assert!(is_quit(&ev(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert!(!is_quit(&ev(KeyCode::Char('c'), n)));
     }

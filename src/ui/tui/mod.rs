@@ -8,15 +8,17 @@
 //! правок и справка F1 — рамкой на весь экран. Красные значения — правленые и
 //! изменённые мутатором (`agr:transform-shadow`).
 //!
-//! Файлы: `grid.rs` — сетка, `term/` — терминал.
+//! Файлы: `grid.rs` — сетка, `term/` — терминал, `browse.rs` — список линков
+//! resolve и ожидание выбранного линка.
 //!
-//! Наружу: [`frame`], [`Act`], [`grid`], [`term`], [`position`].
+//! Наружу: [`frame`], [`Act`], [`grid`], [`term`], [`browse`], [`position`].
 //!
 //! У линка в заголовке справа — его состояние ([`link_line`], `agr:link-state`):
 //! видно всегда, цветом по состоянию; тот же значок — в строке состояния окна.
 //!
 //! Ещё: [`group`], [`title`], [`apply`], [`link_line`], [`split_at`].
 
+pub mod browse;
 pub mod grid;
 pub mod term;
 
@@ -41,6 +43,8 @@ pub enum Act {
     /// Пункт списка выбора (номер среди видимых).
     Pick(usize),
     Key(Key),
+    /// Колонка списка resolve: сортировать по ней ([`browse`]).
+    Sort(usize),
     /// Граница таблицы и детали: её тянут мышью ([`split_at`]), щелчок — ничего.
     Split,
 }
@@ -339,6 +343,9 @@ pub fn frame(d: &mut Desk, cols: usize, rows: usize) -> Grid<Act> {
     }
     if d.help.open {
         draw_help(&mut g, d, cols, rows);
+    }
+    if let Some(f) = &d.link_form {
+        browse::draw_form(&mut g, f, cols, rows);
     }
     g
 }
@@ -720,8 +727,8 @@ pub fn apply(d: &mut Desk, a: Act) {
             d.key(Key::Char(' '));
         }
         Act::Key(k) => d.key(k),
-        // Границу тянут, а не щёлкают: см. [`split_at`].
-        Act::Split => {}
+        // Границу тянут, а не щёлкают: см. [`split_at`]; сортировка — у списка.
+        Act::Split | Act::Sort(_) => {}
     }
 }
 

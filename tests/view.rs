@@ -83,7 +83,6 @@ impl Frames {
         }
     }
 
-    /// Экран, когда `ok` скажет «да» (или 20 с).
     /// Экран, когда `ok` скажет «да», или `None` за `wait`.
     async fn try_until(&mut self, wait: Duration, ok: impl Fn(&Value) -> bool) -> Option<Value> {
         let read = async {
@@ -226,36 +225,31 @@ async fn the_detail_border_follows_the_mouse() {
         .unwrap()
         .to_string();
     let mut frames = Frames::open(&addr, &id).await;
-    input(&addr, &id, json!([{"size": [80, 40]}, {"key": "Enter"}])).await;
-    let f = frames
-        .until("деталь открыта", |f| f["split"].is_u64())
-        .await;
-    // Граница могла сдвинуться в кадре, что ещё в пути (строка состояния):
-    // тогда тянем заново от её нового места — как сделал бы человек.
-    let mut target = None;
-    for _ in 0..3 {
-        let at = frames.screen["split"]
-            .as_u64()
-            .unwrap_or(f["split"].as_u64().unwrap());
-        input(
-            &addr,
-            &id,
-            json!([{"click": [at, 5]}, {"drag": [at - 4, 5]}, {"drag": [at - 8, 5]}, "release"]),
-        )
-        .await;
-        if frames
-            .try_until(Duration::from_secs(3), |f| f["split"] == at - 8)
-            .await
-            .is_some()
-        {
-            target = Some(at - 8);
-            break;
-        }
-    }
-    let at8 = target.expect("граница не тянется");
-    // Отпустили — дальше мышь границу не двигает; ↓ — чтобы кадр точно пришёл.
-    input(&addr, &id, json!([{"drag": [at8 + 8, 5]}, {"key": "Down"}])).await;
+    // Ввод вида применяется по порядку: кадр с итогом ↓ — значит, всё, что
+    // послано до неё, уже применено. Границу читаем с такого кадра, а не ждём
+    // по таймауту: под нагрузкой поздний кадр иначе даёт щелчок мимо границы.
     let has = |f: &Value, s: &str| text(f).iter().any(|l| l.contains(s));
-    let f = frames.until("деталь seq 1", |f| has(f, "seq 1 ")).await;
-    assert_eq!(f["split"], at8);
+    input(&addr, &id, json!({"size": [80, 40]})).await;
+    frames
+        .until("файл прочитан", |f| has(f, "строка 1 из 400"))
+        .await;
+    input(&addr, &id, json!([{"key": "Enter"}, {"key": "Down"}])).await;
+    let f = frames
+        .until("деталь seq 1", |f| {
+            f["split"].is_u64() && has(f, "seq 1 ")
+        })
+        .await;
+    let at = f["split"].as_u64().unwrap();
+    input(
+        &addr,
+        &id,
+        json!([{"click": [at, 5]}, {"drag": [at - 4, 5]}, {"drag": [at - 8, 5]}, "release", {"key": "Down"}]),
+    )
+    .await;
+    let f = frames.until("деталь seq 2", |f| has(f, "seq 2 ")).await;
+    assert_eq!(f["split"], at - 8, "граница там, где отпустили");
+    // Отпустили — дальше мышь границу не двигает.
+    input(&addr, &id, json!([{"drag": [at, 5]}, {"key": "Down"}])).await;
+    let f = frames.until("деталь seq 3", |f| has(f, "seq 3 ")).await;
+    assert_eq!(f["split"], at - 8);
 }

@@ -206,6 +206,25 @@ impl Links {
         self.default.as_deref()
     }
 
+    /// Каталог, где спулы остаются (`--keep`).
+    pub fn spool_dir(&self) -> Option<&Path> {
+        self.keep.as_deref()
+    }
+
+    /// Положить уже поднятый линк в карту и открыть его спул как файл.
+    /// Прежний с тем же url уходит из карты (`agr:serve-link-handle`).
+    pub fn adopt(&self, link: Link) -> Result<File, String> {
+        let url = link.url().to_string();
+        let gate = self.gate(&url);
+        let _one = gate.lock().unwrap();
+        let l = Arc::new(link);
+        let mut f = File::open(l.spool())?;
+        f.name = url.clone();
+        f.link = Some(l.clone());
+        self.open.lock().unwrap().insert(url, l);
+        Ok(f)
+    }
+
     /// Замок открытия этого url.
     fn gate(&self, url: &str) -> Arc<Mutex<()>> {
         self.gates

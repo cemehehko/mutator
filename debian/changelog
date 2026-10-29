@@ -1,3 +1,54 @@
+tll-mutator (0.0.21+ubuntu20.04) unstable; urgency=medium
+
+  * Номер строки («строка N из M») не теряется, когда индекс готов раньше
+    первого окна: окно перечитывается.
+  * Тест границы детали в браузере не зависит от нагрузки.
+
+ -- Andrew <cemehehko@mail.ru>  Wed, 28 Oct 2026 12:00:00 +0300
+
+tll-mutator (0.0.20+ubuntu20.04) unstable; urgency=medium
+
+  * Список resolve: Esc на ожидании открытия возвращает к списку и не
+    открывает файл; ошибка открытия видна в списке.
+  * Веб: открытие линка не блокирует вкладку; уход на другой канал
+    закрывает предыдущий.
+  * --serve берёт адрес resolve из recent.toml; список в окне, в терминале
+    и в REST — один и тот же.
+  * В окне подсказка списка — Ctrl+O: ⌘O занято меню «Открыть».
+
+ -- Andrew <cemehehko@mail.ru>  Tue, 27 Oct 2026 23:30:00 +0300
+
+tll-mutator (0.0.19+ubuntu20.04) unstable; urgency=medium
+
+  * Список resolve: служебные части stream-каналов (…/online, …/request)
+    скрыты — их видно по Ctrl+S, в строке состояния — сколько скрыто;
+    REST — ?all=1.
+
+ -- Andrew <cemehehko@mail.ru>  Tue, 27 Oct 2026 21:00:00 +0300
+
+tll-mutator (0.0.18+ubuntu20.04) unstable; urgency=medium
+
+  * Форма «Открыть линк»: url и параметры открытия правятся вместе — `o` в
+    виде линка, Ctrl+O в списке resolve; ↑↓ — пресеты (online, initial,
+    seq, block) и история. Тот же url — заново в новый спул, другой —
+    открывается вместо текущего.
+  * Окно: строка `o` раньше не рисовалась — теперь модальная форма.
+
+ -- Andrew <cemehehko@mail.ru>  Tue, 27 Oct 2026 20:00:00 +0300
+
+tll-mutator (0.0.17+ubuntu20.04) unstable; urgency=medium
+
+  * Без файла окно и --tui открывают список линков resolve-сервера: живая
+    таблица экспортов (сервис, канал, proto, адрес, хост, теги, схема),
+    фильтр по сервису и каналу, сортировка, прокрутка; Enter открывает
+    resolve://SERVICE/CHANNEL, F5 — список из вида, Esc — назад.
+  * Сервер: --resolve HOST:PORT, MUTATOR_RESOLVE или введённый в списке
+    (запоминается); последний файл — по новой опции --continue.
+  * Веб: вкладка без файла — тот же список; REST GET /api/v1/resolve
+    (?filter=, ?sort=).
+
+ -- Andrew <cemehehko@mail.ru>  Tue, 27 Oct 2026 18:00:00 +0300
+
 tll-mutator (0.0.16+ubuntu20.04) unstable; urgency=medium
 
   * Сервер снаружи — только с токеном: --token (MUTATOR_TOKEN) закрывает весь

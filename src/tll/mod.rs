@@ -16,7 +16,8 @@
 //! `tll_scheme_t` в [`crate::scheme::Scheme`], `write.rs` — запись нового файла,
 //! `transform.rs` — прогон тел через Lua без чтения (`lua+direct`), `driver.rs` —
 //! TLL как бэкенд фасада (`Driver`), `link.rs` — линк: любой канал по url
-//! (`resolve://`, `stream+`), его состояние и сообщения.
+//! (`resolve://`, `stream+`), его состояние и сообщения, `resolve.rs` —
+//! протокол resolve-сервера: список экспортов.
 //!
 //! Бэкенд TLL фасада [`crate::io`]: общие типы ([`Open`], [`Msg`], [`Info`],
 //! [`LuaMode`]) объявлены там, здесь — только их чтение и запись libtll.
@@ -28,6 +29,7 @@ mod convert;
 pub mod driver;
 pub mod link;
 pub mod log;
+pub mod resolve;
 pub mod sys;
 mod transform;
 mod write;

@@ -26,17 +26,22 @@
 //! открывает каналом ([`DriverContext::link`]); [`link::Link`] пишет его в спул —
 //! дальше это обычный файл (`agr:link-spool`).
 //!
+//! Список линков resolve-сервера бэкенд отдаёт подпиской
+//! ([`DriverContext::browse`]); [`resolve::Browser`] собирает из неё список.
+//!
 //! Файлы: `dynlib.rs` — загрузка библиотек бэкендов и таблицы их функций,
-//! `link.rs` — линк: канал в спул и его состояние.
+//! `link.rs` — линк: канал в спул и его состояние, `resolve.rs` — список линков
+//! resolve-сервера.
 //!
 //! Наружу: [`Backend`], [`Driver`], [`DriverContext`], [`DriverReader`],
 //! [`DriverWriter`], [`DriverTransformer`], [`register`], [`driver`], [`force`],
-//! [`resolve`], [`Context`], [`Pooled`], [`Open`], [`Reader`], [`Writer`],
+//! [`resolve`](fn@resolve), [`Context`], [`Pooled`], [`Open`], [`Reader`], [`Writer`],
 //! [`Transformer`], [`Msg`], [`Info`], [`LuaMode`], [`dump_line`], [`quiet`],
-//! [`take_error`], [`link`].
+//! [`take_error`], [`link`], [`resolve`](mod@resolve) — список линков.
 
 pub mod dynlib;
 pub mod link;
+pub mod resolve;
 
 use std::cell::RefCell;
 use std::io::Read;
@@ -106,6 +111,10 @@ pub trait Driver: Send + Sync {
     fn link_open(&self, _url: &str) -> String {
         String::new()
     }
+    /// Знает ли протокол resolve-сервера ([`DriverContext::browse`]).
+    fn resolve(&self) -> bool {
+        false
+    }
 }
 
 /// Контекст бэкенда на поток.
@@ -130,6 +139,10 @@ pub trait DriverContext: Send {
     /// Открыть линк `url` с параметрами открытия `open` (`mode=online`).
     fn link(&self, _url: &str, _open: &str) -> Result<Box<dyn link::DriverLink>, String> {
         Err("этот бэкенд линки не открывает".into())
+    }
+    /// Подписаться на экспорты resolve-сервера `addr` (`HOST:PORT`).
+    fn browse(&self, _addr: &str) -> Result<Box<dyn resolve::DriverBrowse>, String> {
+        Err("этот бэкенд resolve не знает".into())
     }
 }
 
@@ -246,7 +259,7 @@ pub enum LuaMode {
 #[derive(Debug, Clone, Default)]
 pub struct Open {
     pub path: PathBuf,
-    /// Бэкенд, если известен заранее; `None` — по файлу ([`resolve`]).
+    /// Бэкенд, если известен заранее; `None` — по файлу ([`resolve`](fn@resolve)).
     pub backend: Option<Backend>,
     /// Первое сообщение — с seq не меньше этого; `None` — с начала файла.
     pub seq: Option<i64>,

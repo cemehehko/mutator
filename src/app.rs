@@ -28,16 +28,19 @@ use crate::ui;
 const USAGE: &str = "\
 mutator [FILE|LINK] [параметры] — просмотр датника или линка
 
-  FILE                  без файла окно открывает последний или спрашивает файл;
-                        для --tui, --dump и --stat файл обязателен;
+  FILE                  без файла окно и --tui открывают список линков
+                        resolve-сервера (F5 — он же из вида); для --dump и
+                        --stat файл обязателен;
                         несколько файлов одним видом: a.dat+b.dat — склейка в
                         указанном порядке, r.current.dat-3 — файл и ещё 3 более
                         старых той же ротации (номера в именах, current — последний)
   LINK                  канал вместо файла: resolve://SERVICE/CHANNEL, stream+…,
                         с префиксами (lua+…); только просмотр
   --url LINK            то же, что LINK, — явно (url канала целиком)
-  --resolve HOST:PORT   resolve-сервер: для resolve:// без resolve.request и для
-                        схем по хешу (scheme=sha256://…); или MUTATOR_RESOLVE
+  --resolve HOST:PORT   resolve-сервер: список линков, resolve:// без
+                        resolve.request и схемы по хешу (scheme=sha256://…);
+                        или MUTATOR_RESOLVE, иначе — введённый в списке
+  --continue            открыть последний файл или линк вместо списка
   --open PARAMS         параметры открытия линка: mode=online (по умолчанию),
                         mode=initial, mode=seq;seq=N, mode=block;block=N
   --keep DIR            спул линка оставить датником в DIR (по умолчанию —
@@ -118,6 +121,8 @@ struct Args {
     fresh: bool,
     foreground: bool,
     gui: bool,
+    /// `--continue`: последний файл вместо списка линков.
+    cont: bool,
     backend: Option<io::Backend>,
     serve: Option<String>,
     token: Option<String>,
@@ -161,6 +166,7 @@ fn parse() -> Result<Args, String> {
             "--fresh" => a.fresh = true,
             "--foreground" | "-F" => a.foreground = true,
             "--gui" => a.gui = true,
+            "--continue" => a.cont = true,
             "--url" => a.link = Some(val(&x)?),
             "--resolve" => a.resolve = Some(val(&x)?),
             "--open" => a.open = Some(val(&x)?),
@@ -183,6 +189,9 @@ fn parse() -> Result<Args, String> {
 /// `--gui` — окно: с терминалом и печатью он не сочетается, а в сборке без GUI
 /// окна нет.
 fn check(a: &Args) -> Result<(), String> {
+    if a.cont && (a.file.is_some() || a.link.is_some()) {
+        return Err("--continue — вместо файла, не вместе с ним".into());
+    }
     if a.token.is_some() && a.serve.is_none() {
         return Err("--mcp-token — для --serve (MCP по HTTP)".into());
     }
@@ -207,8 +216,8 @@ fn check(a: &Args) -> Result<(), String> {
         if a.range.is_some() {
             return Err("-s — для файла; у линка начало задаёт --open \"mode=seq;seq=N\"".into());
         }
-    } else if a.open.is_some() || a.keep.is_some() || a.resolve.is_some() {
-        return Err("--open, --keep и --resolve — только для линка".into());
+    } else if a.open.is_some() || a.keep.is_some() {
+        return Err("--open и --keep — только для линка".into());
     }
     if !a.gui {
         return Ok(());
@@ -231,7 +240,7 @@ fn stays_in_terminal(a: &Args) -> bool {
 
 /// Весь запуск: аргументы процесса, выбор режима, код выхода.
 pub fn main() -> ExitCode {
-    let a = match parse() {
+    let mut a = match parse() {
         Ok(a) => a,
         Err(e) => {
             if !e.is_empty() {
@@ -270,9 +279,20 @@ pub fn main() -> ExitCode {
     let file = match a.file.clone() {
         Some(f) => Some(f),
         None if a.link.is_some() => None,
-        // Окно без аргумента: последний открытый файл; если его нет — заглушка
-        // с диалогом выбора (`agr:open-without-file`).
-        None if windowed(&a) => crate::recent::Recent::load().last_existing(),
+        // `--continue`: последний файл или линк (`agr:open-without-file`).
+        None if a.cont => match crate::recent::Recent::load().last_to_continue() {
+            Some(p) if io::link::is_link(&p.to_string_lossy()) => {
+                a.link = Some(p.to_string_lossy().into_owned());
+                None
+            }
+            Some(p) => Some(p),
+            None => {
+                eprintln!("mutator: --continue: последних файлов нет");
+                return ExitCode::from(2);
+            }
+        },
+        // Без аргумента — список линков resolve (`agr:resolve-browse`).
+        None if browsable(&a) => None,
         None => {
             eprintln!("{}", usage());
             return ExitCode::from(2);
@@ -313,7 +333,10 @@ fn serve(a: &Args) -> Result<(), String> {
     if let Some(url) = &a.link {
         links.open(url, a.open.as_deref())?;
     }
-    let server = Server::new(links);
+    // Тот же адрес, что у окна и `--tui`: `--resolve`, окружение или
+    // введённый в списке и записанный в `recent.toml`.
+    let resolve = crate::recent::Recent::load().resolve_addr();
+    let server = Server::with_resolve(links, resolve.as_deref());
     #[cfg(feature = "mcp")]
     if a.mcp_stdio {
         return crate::serve::mcp::stdio(server);
@@ -341,8 +364,13 @@ fn serve(a: &Args) -> Result<(), String> {
     })
 }
 
-/// Запуск без файла допустим только для окна: ни терминал, ни печать файла не
-/// просят (GUI-сборка; без GUI окна нет).
+/// Без файла открывается список линков: в окне и терминале, но не в печати.
+fn browsable(a: &Args) -> bool {
+    !(a.dump || a.stat || a.dump_seq)
+}
+
+/// Окно, а не терминал и не печать (GUI-сборка; без GUI окна нет).
+#[cfg(feature = "gui")]
 fn windowed(a: &Args) -> bool {
     cfg!(feature = "gui") && !(a.tui || a.dump || a.stat || a.dump_seq)
 }
@@ -404,13 +432,10 @@ fn run(a: Args, file: Option<PathBuf>) -> Result<(), String> {
     }
     let Some(file) = file else {
         #[cfg(feature = "gui")]
-        {
+        if !a.tui {
             return ui::run(None, None, |_| {});
         }
-        #[cfg(not(feature = "gui"))]
-        {
-            return Err("нужен файл".to_string());
-        }
+        return ui::tui::term::run_browse();
     };
     if a.dump_seq {
         let info = File::open_spec(&file.to_string_lossy())?.info;

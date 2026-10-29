@@ -1,5 +1,6 @@
-//! Последние открытые файлы: окно без аргумента открывает последний, меню
-//! «Файл» показывает список (`agr:open-without-file`).
+//! Последние открытые файлы: `--continue` открывает последний, меню «Файл»
+//! показывает список (`agr:open-without-file`). Здесь же — адрес
+//! resolve-сервера, введённый в списке линков (`agr:resolve-browse`).
 //!
 //! Лежат в `recent.toml` рядом с сессиями ([`crate::session::config_dir`]).
 //! Свежий — первым, без повторов, не больше [`LIMIT`]; путь абсолютный, чтобы
@@ -21,6 +22,9 @@ pub const LIMIT: usize = 10;
 #[serde(default)]
 pub struct Recent {
     pub files: Vec<PathBuf>,
+    /// Последний введённый адрес resolve-сервера (`HOST:PORT`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolve: Option<String>,
 }
 
 /// Абсолютный путь файла; не нашёлся на диске — как есть.
@@ -86,6 +90,26 @@ impl Recent {
     pub fn last_existing(&self) -> Option<PathBuf> {
         self.existing().first().map(|p| (*p).clone())
     }
+
+    /// Что открыть по `--continue`: последний файл, который ещё есть, или линк.
+    pub fn last_to_continue(&self) -> Option<PathBuf> {
+        self.files
+            .iter()
+            .find(|p| {
+                let s = p.to_string_lossy();
+                crate::io::link::is_link(&s) || p.is_file() || crate::spec::expand(&s).is_ok()
+            })
+            .cloned()
+    }
+
+    /// Адрес resolve-сервера: `--resolve` или `MUTATOR_RESOLVE`, иначе —
+    /// запомненный.
+    pub fn resolve_addr(&self) -> Option<String> {
+        std::env::var("MUTATOR_RESOLVE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| self.resolve.clone())
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +128,26 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, b"x").unwrap();
         p
+    }
+
+    /// `agr:open-without-file` — `--continue` берёт последний живой: файл,
+    /// которого нет, пропускается, линк — нет; адрес сервера переживает запись.
+    #[test]
+    fn continue_takes_last_live_file_or_link() {
+        let d = scratch("continue");
+        let a = file(&d, "a.dat");
+        let mut r = Recent::default();
+        r.push(&a);
+        r.push(&d.join("gone.dat"));
+        assert_eq!(r.last_to_continue(), Some(absolute(&a)));
+        r.files.insert(0, PathBuf::from("resolve://gw/orders"));
+        assert_eq!(
+            r.last_to_continue(),
+            Some(PathBuf::from("resolve://gw/orders"))
+        );
+        r.resolve = Some("h:5555".into());
+        r.save_to(&d).unwrap();
+        assert_eq!(Recent::load_from(&d).resolve.as_deref(), Some("h:5555"));
     }
 
     /// `agr:open-without-file` — свежий файл первым, повторное открытие не

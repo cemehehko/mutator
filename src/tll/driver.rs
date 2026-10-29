@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use super::{log, quiet, Context, Reader, Transformer, Writer};
 use crate::io::link::DriverLink;
+use crate::io::resolve::DriverBrowse;
 use crate::io::{
     Driver, DriverContext, DriverReader, DriverTransformer, DriverWriter, Info, Msg, Open,
 };
@@ -60,6 +61,10 @@ impl Driver for Tll {
     fn link_open(&self, url: &str) -> String {
         super::link::default_open(url).into()
     }
+
+    fn resolve(&self) -> bool {
+        true
+    }
 }
 
 impl DriverContext for Context {
@@ -97,6 +102,10 @@ impl DriverContext for Context {
 
     fn link(&self, url: &str, open: &str) -> Result<Box<dyn DriverLink>, String> {
         Ok(Box::new(super::link::Link::open(self, url, open)?))
+    }
+
+    fn browse(&self, addr: &str) -> Result<Box<dyn DriverBrowse>, String> {
+        Ok(Box::new(super::resolve::Browse::open(self, addr)?))
     }
 }
 

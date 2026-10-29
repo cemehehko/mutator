@@ -132,7 +132,9 @@ async function load() {
   ]);
   $("version").textContent = "v" + info.version;
   $("default").textContent = info.default ? "по умолчанию: " + info.default : "";
-  if (info.default) { $("view-open").file.value = info.default; openView(info.default); }
+  // Без файла по умолчанию — список линков resolve.
+  if (info.default) $("view-open").file.value = info.default;
+  openView(info.default || "");
   ops = list;
   const box = $("ops");
   box.replaceChildren();
@@ -464,7 +466,7 @@ $("view-open").onsubmit = (e) => { e.preventDefault(); openView(e.target.file.va
 const named = {
   ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", Enter: "Enter",
   Escape: "Esc", Backspace: "Backspace", Delete: "Delete", PageUp: "PageUp", PageDown: "PageDown",
-  Home: "Home", End: "End", F1: "F1",
+  Home: "Home", End: "End", F1: "F1", F5: "F5",
 };
 $("screen").addEventListener("keydown", (e) => {
   let i = null;

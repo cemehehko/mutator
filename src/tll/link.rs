@@ -11,9 +11,9 @@
 //! Схему по хешу (`scheme=sha256://…` в url, скопированном из resolve) libtll
 //! берёт только из кэша контекста, куда её кладёт `resolve://`. Для прямого
 //! url её загружает [`preload`]: спрашивает все экспорты у resolve-сервера
-//! (`--resolve HOST:PORT`, `MUTATOR_RESOLVE`) и кладёт в кэш тело с нужным
-//! хешем. Тот же сервер подставляется в `resolve://` без `resolve.request`
-//! ([`with_resolve`]).
+//! (`--resolve HOST:PORT`, `MUTATOR_RESOLVE`; протокол — [`super::resolve`]) и
+//! кладёт в кэш тело с нужным хешем. Тот же сервер подставляется в
+//! `resolve://` без `resolve.request` ([`with_resolve`]).
 //!
 //! Наружу: [`Link`], [`is_link`], [`default_open`], [`preload`], [`with_resolve`].
 
@@ -22,8 +22,9 @@ use std::os::raw::{c_int, c_void};
 use std::time::{Duration, Instant};
 
 use super::sys::*;
-use super::{convert, lifecycle, log, next_name, process_tree, Context};
+use super::{convert, lifecycle, log, next_name, process_tree, resolve, Context};
 use crate::io::link::{DriverLink, LinkEvent, LinkState};
+use crate::io::resolve::BrowseEvent;
 use crate::io::Msg;
 
 /// Url канала, а не файла: есть протокол, и он не `file`.
@@ -156,7 +157,7 @@ impl Link {
         if url.contains("lua+") && !ctx.ensure_lua() {
             return Err("Lua недоступен: нет модуля tll-lua (MUTATOR_LUA)".into());
         }
-        let url = &with_resolve(url, resolve_addr().as_deref());
+        let url = &with_resolve(url, resolve::addr().as_deref());
         preload(ctx, url)?;
         let full = with_defaults(url, next_name());
         let g = lifecycle();
@@ -203,13 +204,13 @@ impl Link {
 
 impl Link {
     /// Схема данных канала.
-    fn data_scheme(&self) -> Option<crate::scheme::Scheme> {
+    pub(super) fn data_scheme(&self) -> Option<crate::scheme::Scheme> {
         let s = unsafe { tll_channel_scheme(self.ch, TLL_MESSAGE_DATA as c_int) };
         (!s.is_null()).then(|| unsafe { convert::scheme(&*s) })
     }
 
     /// Послать сообщение в канал.
-    fn post(&self, m: &Msg) -> Result<(), String> {
+    pub(super) fn post(&self, m: &Msg) -> Result<(), String> {
         let msg = tll_msg_t {
             type_: TLL_MESSAGE_DATA,
             flags: 0,
@@ -229,30 +230,20 @@ impl Link {
     }
 }
 
-/// Адрес resolve-сервера: `--resolve` (его кладёт в окружение запуск) или
-/// `MUTATOR_RESOLVE`.
-fn resolve_addr() -> Option<String> {
-    std::env::var("MUTATOR_RESOLVE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-}
-
 /// `resolve://` без своего `resolve.request` — через сервер `addr` по tcp.
 pub fn with_resolve(url: &str, addr: Option<&str>) -> String {
-    let resolve = url
+    let via = url
         .split_once("://")
         .is_some_and(|(p, _)| p.split('+').any(|p| p == "resolve"));
     match addr {
-        Some(a) if resolve && !url.contains("resolve.request") => format!(
+        Some(a) if via && !url.contains("resolve.request") => format!(
             "{url};resolve.request.tll.proto=tcp;resolve.request.tll.host={a};\
-             resolve.request.mode=client;resolve.request.scheme={RESOLVE_SCHEME}"
+             resolve.request.mode=client;resolve.request.scheme={}",
+            resolve::RESOLVE_SCHEME
         ),
         _ => url.to_string(),
     }
 }
-
-/// Схема протокола resolve — из поставки libtll.
-const RESOLVE_SCHEME: &str = "yaml://tll/logic/resolve.yaml";
 
 /// Хеши схем в url: `scheme=sha256://…` (и `…scheme=` вложенных каналов).
 fn hashes(url: &str) -> Vec<String> {
@@ -272,14 +263,13 @@ pub fn preload(ctx: &Context, url: &str) -> Result<(), String> {
     if missing.is_empty() {
         return Ok(());
     }
-    let Some(addr) = resolve_addr() else {
+    let Some(addr) = resolve::addr() else {
         return Err(format!(
             "схема sha256://{}… — по хешу, её знает resolve-сервер: укажите --resolve HOST:PORT",
             &missing[0][..12.min(missing[0].len())]
         ));
     };
-    let req = format!("tcp://{addr};mode=client;scheme={RESOLVE_SCHEME}");
-    let mut l = Link::open(ctx, &req, "")?;
+    let mut l = Link::open(ctx, &resolve::client_url(&addr), "")?;
     let until = Instant::now() + Duration::from_secs(10);
     let mut asked = false;
     let mut scheme = None;
@@ -288,7 +278,7 @@ pub fn preload(ctx: &Context, url: &str) -> Result<(), String> {
             match ev {
                 LinkEvent::State(LinkState::Active) if !asked => {
                     let s = l.data_scheme().ok_or("у resolve-сервера нет схемы")?;
-                    l.post(&request(&s)?)?;
+                    l.post(&resolve::request(&s)?)?;
                     scheme = Some(s);
                     asked = true;
                 }
@@ -300,7 +290,14 @@ pub fn preload(ctx: &Context, url: &str) -> Result<(), String> {
                 }
                 LinkEvent::Data(m) => {
                     let Some(s) = &scheme else { continue };
-                    for (key, body) in exported(s, &m) {
+                    let Some(BrowseEvent::Export(e)) = resolve::parse(s, &m) else {
+                        continue;
+                    };
+                    for (key, body) in e
+                        .config
+                        .into_iter()
+                        .filter(|(k, _)| k.starts_with("scheme."))
+                    {
                         let Some(i) = missing.iter().position(|h| key.contains(h.as_str())) else {
                             continue;
                         };
@@ -326,49 +323,6 @@ pub fn preload(ctx: &Context, url: &str) -> Result<(), String> {
         None => Ok(()),
         Some(h) => Err(format!("resolve-сервер {addr} не знает схему sha256://{h}")),
     }
-}
-
-/// `Request` на все экспорты: сервис и канал — `*`.
-fn request(s: &crate::scheme::Scheme) -> Result<Msg, String> {
-    let st = s
-        .messages()
-        .find(|m| m.name == "Request")
-        .ok_or("в схеме resolve нет Request")?;
-    let mut e = crate::edit::Edits::default();
-    e.set(0, "Request", "service", "", "*");
-    e.set(0, "Request", "channel", "", "*");
-    let m = Msg {
-        seq: 0,
-        msgid: st.msgid,
-        data: vec![0; st.size],
-    };
-    crate::edit::encode::view(s, &e, m)
-}
-
-/// Пары `config` из `ExportChannel`: ключ `scheme.<hash>` и тело схемы.
-fn exported(s: &crate::scheme::Scheme, m: &Msg) -> Vec<(String, String)> {
-    let Some(st) = s.message(m.msgid).filter(|st| st.name == "ExportChannel") else {
-        return Vec::new();
-    };
-    let root = crate::decode::decode(s, st, &m.data);
-    let Some(config) = root.children.iter().find(|n| n.name == "config") else {
-        return Vec::new();
-    };
-    config
-        .children
-        .iter()
-        .filter_map(|kv| {
-            let get = |name: &str| {
-                kv.children
-                    .iter()
-                    .find(|n| n.name == name)
-                    .and_then(|n| n.value.as_ref())
-                    .map(|v| v.text())
-            };
-            let key = get("key")?;
-            key.starts_with("scheme.").then_some((key, get("value")?))
-        })
-        .collect()
 }
 
 impl DriverLink for Link {

@@ -6,8 +6,9 @@
 //! hex, `bar.rs` — панель фильтра/поиска/колонок, `commit.rs` — диалог
 //! фиксации правок, `mass.rs` — подтверждение массовой правки,
 //! `lua_editor.rs` — редактор Lua-кода transform-режима, `agent/` — состояние
-//! экрана агента, `help.rs` — справка F1, `shell.rs` — оболочка окна: заглушка
-//! без файла, смена файла и перетаскивание, `menu.rs` — родное меню macOS и
+//! экрана агента, `help.rs` — справка F1, `shell.rs` — оболочка окна: список
+//! линков без файла, смена файла и перетаскивание, `browse.rs` — список линков
+//! resolve в окне, `menu.rs` — родное меню macOS и
 //! диалог выбора файла), подсистема `tui/`
 //! (сетка,
 //! кадр, терминал), а этот модуль только собирает страницу. Общие правила
@@ -29,6 +30,8 @@
 
 pub mod agent;
 mod bar;
+#[cfg(feature = "gui")]
+mod browse;
 pub mod cols;
 mod commit;
 mod detail;
@@ -340,6 +343,8 @@ impl App {
                             continue;
                         }
                         let k = match key {
+                            // ⌘U — стереть поле формы `o`.
+                            egui::Key::U if modifiers.command || modifiers.ctrl => Key::Ctrl('u'),
                             egui::Key::ArrowUp => Key::Up,
                             egui::Key::ArrowDown => Key::Down,
                             egui::Key::ArrowLeft => Key::Left,
@@ -370,7 +375,11 @@ impl App {
     fn gui(&mut self, ui: &mut egui::Ui, keys: Vec<Key>) {
         for k in keys {
             // В окне строки ввода — свои поля egui: клавиши их только фокусируют.
-            match (k, self.desk.prompt.is_some()) {
+            // Форма `o` — как строка ввода: буквы — ей, а не панели.
+            match (
+                k,
+                self.desk.prompt.is_some() || self.desk.link_form.is_some(),
+            ) {
                 (Key::Char('f'), false) => self.bar.focus = Some(bar::Field::Filter),
                 (Key::Char('/'), false) | (Key::Char('?'), false) => {
                     self.bar.focus = Some(bar::Field::Search)
@@ -420,6 +429,10 @@ impl App {
         bar::picker(ui, &mut self.desk);
         detail::edit_line(ui, &mut self.desk);
         commit::show(ui, &mut self.desk);
+        #[cfg(feature = "gui")]
+        if let Some(f) = &self.desk.link_form {
+            browse::form(ui, f);
+        }
         mass::show(ui, &mut self.desk);
     }
 

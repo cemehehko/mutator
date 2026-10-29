@@ -8,7 +8,7 @@
 //!
 //! | Метод | Путь | Что |
 //! |---|---|---|
-//! | POST | `/api/v1/views` | открыть вид `{file?}` — `{id, file}` |
+//! | POST | `/api/v1/views` | открыть вид `{file?}` — `{id, file}`; без файла — список линков resolve |
 //! | POST | `/api/v1/views/{id}/input` | ввод, один или массивом: `{key}`, `{char}`, `{ctrl}`, `{click: [r, c]}`, `{wheel}`, `{size: [cols, rows]}` |
 //! | GET | `/api/v1/views/{id}/frames` | SSE кадров (`frame`) |
 //! | DELETE | `/api/v1/views/{id}` | закрыть |
@@ -30,7 +30,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::rest::Server;
-use super::view::{Frame, Input, Views, IDLE};
+use super::view::{Frame, Input, Start, Views, IDLE};
+use crate::io::link::Link;
 
 /// Страница веб-UI.
 pub const PAGE: &str = include_str!("../../web/index.html");
@@ -43,7 +44,34 @@ struct Ui {
 
 /// Страница на `/` и виды под `/api/v1/views`; брошенные виды закрываются сами.
 pub fn mount(router: Router, server: Server) -> Router {
-    let views = Arc::new(Views::default());
+    let begin = server.clone();
+    let opener = Arc::new(move |url: &str, open: &str| {
+        let keep = begin.links().spool_dir().map(|p| p.to_path_buf());
+        // Не ждём Active здесь: вид рисует ожидание и по Esc бросает линк.
+        Link::start(url, open, None, keep.as_deref(), Arc::new(|| {})).map(Start::Link)
+    });
+    let adopt_at = server.clone();
+    let adopt = Arc::new(move |link: Link| adopt_at.links().adopt(link));
+    let release_at = server.clone();
+    let release = Arc::new(move |url: &str| {
+        release_at.links().close(url);
+    });
+    let share_at = server.clone();
+    let share = Arc::new(
+        move |addr: &str, browser: Arc<crate::io::resolve::Browser>| {
+            share_at.adopt_resolve(browser);
+            let mut recent = crate::recent::Recent::load();
+            recent.resolve = Some(addr.to_string());
+            let _ = recent.save();
+        },
+    );
+    let views = Arc::new(Views::bind(
+        server.resolve_slot(),
+        opener,
+        adopt,
+        release,
+        share,
+    ));
     tokio::spawn({
         let views = views.clone();
         async move {
@@ -88,11 +116,9 @@ async fn open(State(ui): State<Ui>, body: Option<Json<Open>>) -> Response {
         .and_then(|Json(o)| o.file)
         .filter(|f| !f.is_empty())
         .or_else(|| ui.server.links().default_file().map(str::to_string));
+    // Без файла — список линков resolve (`agr:resolve-browse`).
     let Some(name) = name else {
-        return problem(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "нужен file: путь или url линка".into(),
-        );
+        return Json(json!({ "id": ui.views.open_browse(), "file": null })).into_response();
     };
     let server = ui.server.clone();
     let n = name.clone();

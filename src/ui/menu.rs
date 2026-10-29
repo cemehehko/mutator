@@ -1,8 +1,8 @@
 //! Родное меню macOS и диалог выбора файла (`agr:open-without-file`).
 //!
 //! Меню — системная строка вверху экрана (`muda`): меню приложения (скрыть,
-//! выйти) и «Файл» с пунктами «Открыть…» (⌘O), «Последние файлы» и «Очистить
-//! список». Edit-меню нет намеренно: его ускорители перехватили бы ⌘C/⌘V,
+//! выйти) и «Файл» с пунктами «Открыть…» (⌘O), «Линки resolve…» (F5),
+//! «Последние файлы» и «Очистить список». Edit-меню нет намеренно: его ускорители перехватили бы ⌘C/⌘V,
 //! которые окно получает как обычные клавиши. Меню создаётся в создании
 //! приложения eframe — на главном потоке и после старта `NSApplication`.
 //! Щелчки приходят обработчиком `muda` из системы: он кладёт действие в канал
@@ -25,6 +25,8 @@ use std::path::PathBuf;
 pub enum Action {
     /// «Открыть…» — показать диалог выбора файла.
     Open,
+    /// «Линки resolve…» — список линков (F5).
+    Browse,
     /// Файл из «Последних».
     Recent(PathBuf),
     /// «Очистить список».
@@ -34,6 +36,9 @@ pub enum Action {
 /// Идентификатор пункта «Открыть…».
 #[cfg(target_os = "macos")]
 const OPEN: &str = "open";
+/// Идентификатор пункта «Линки resolve…».
+#[cfg(target_os = "macos")]
+const BROWSE: &str = "browse";
 /// Идентификатор пункта «Очистить список».
 #[cfg(target_os = "macos")]
 const CLEAR: &str = "clear";
@@ -79,7 +84,7 @@ mod mac {
     use muda::accelerator::{Accelerator, Code, Modifiers};
     use muda::{Menu as Native, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
-    use super::{label, Action, CLEAR, OPEN, RECENT};
+    use super::{label, Action, BROWSE, CLEAR, OPEN, RECENT};
     use crate::recent::Recent;
 
     /// Системное меню окна.
@@ -115,9 +120,21 @@ mod mac {
                 true,
                 Some(Accelerator::new(Modifiers::META, Code::KeyO)),
             );
+            let browse = MenuItem::with_id(
+                BROWSE,
+                "Линки resolve…",
+                true,
+                Some(Accelerator::new(Modifiers::empty(), Code::F5)),
+            );
             let list = Submenu::new("Последние файлы", true);
             let clear = MenuItem::with_id(CLEAR, "Очистить список", true, None);
-            let _ = file.append_items(&[&open, &list, &PredefinedMenuItem::separator(), &clear]);
+            let _ = file.append_items(&[
+                &open,
+                &browse,
+                &list,
+                &PredefinedMenuItem::separator(),
+                &clear,
+            ]);
             let _ = native.append_items(&[&app, &file]);
             native.init_for_nsapp();
 
@@ -173,6 +190,7 @@ mod mac {
             while let Ok(id) = self.rx.try_recv() {
                 match id.as_str() {
                     OPEN => out.push(Action::Open),
+                    BROWSE => out.push(Action::Browse),
                     CLEAR => out.push(Action::Clear),
                     _ => {
                         let path = id
